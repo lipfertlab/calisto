@@ -1,0 +1,7 @@
+Default:
+  bead_time_to_seconds: 1.0
+  bead_xy_position_to_nanometers: 1.0
+  bead_z_position_to_nanometers: 1.0
+  magnet_position_to_millimeters: 1.0
+  magnet_time_to_seconds: 1.0
+  variance_axis: x
