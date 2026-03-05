@@ -1,4 +1,4 @@
-# CALISTO — Calibration of Forces in Single-Molecule Tweezers Operations
+# CALISTO — ***Cali***bration ***S***uite for Magnetic ***T***weezers ***O***peration
 
 **CALISTO** is a desktop GUI application for force calibration of Magnetic Tweezers (MT) experiments. It provides an interactive, step-by-step workflow for loading bead tracking data, inspecting traces, selecting reference beads, determining offsets, and extracting calibrated force–magnet position curves 
 
@@ -231,6 +231,40 @@ src/CALISTO/
 ## Disclaimer — `tweezepy`
 
 CALISTO bundles a fork of [**tweezepy**](https://github.com/ianlmorgan/tweezepy), an open-source Python package for single-molecule force calibration originally developed by Ian L. Morgan. The bundled version comes from [this fork](https://github.com/alptug/tweezepy), which extends the original package with **Hadamard Variance (HV)** calibration support. Both the original `tweezepy` and the fork are licensed under the **GNU General Public License v3.0 (GPLv3)**. The copy included in this repository (under `src/CALISTO/tweezepy/`) may differ from either upstream. All modifications remain under the same GPLv3 license. For the original package, visit the [tweezepy GitHub repository](https://github.com/ianlmorgan/tweezepy); for the fork bundled here, see [alptug/tweezepy](https://github.com/alptug/tweezepy).
+
+---
+
+## Citation
+
+If you use CALISTO in a publication, please cite this repository and the `tweezepy` paper:
+
+```bibtex
+@article{morgan2021tweezepy,
+  title={Tweezepy: A Python package for calibrating forces in single-molecule video-tracking experiments},
+  author={Morgan, Ian L and Saleh, Omar A},
+  journal={Plos one},
+  volume={16},
+  number={12},
+  pages={e0262028},
+  year={2021},
+  publisher={Public Library of Science San Francisco, CA USA}
+}
+```
+
+If you used Hadamard variance (HV) calibration, please also cite:
+
+```bibtex
+@article{pritzl2024accurate,
+  title={Accurate drift-invariant single-molecule force calibration using the Hadamard variance},
+  author={Pritzl, Stefanie D and Ulug{\"o}l, Alptu{\u{g}} and K{\"o}r{\"o}sy, Caroline and Filion, Laura and Lipfert, Jan},
+  journal={Biophysical Journal},
+  volume={123},
+  number={22},
+  pages={3964--3976},
+  year={2024},
+  publisher={Elsevier}
+}
+```
 
 ---
 
