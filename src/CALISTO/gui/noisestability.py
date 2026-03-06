@@ -9,8 +9,9 @@ from PySide6.QtWidgets import (
     QGroupBox,
     QTableWidget,
     QCheckBox,
+    QApplication,
 )
-from PySide6.QtCore import QItemSelectionModel
+from PySide6.QtCore import QItemSelectionModel, Qt
 import pyqtgraph as pyg
 import numpy as np
 
@@ -26,6 +27,7 @@ sys.path.append(str(Path(__file__).resolve().parent.parent))
 from engines.engine import BeadType
 
 import engines.noisestability_engine as engine
+from gui.worker import WorkerManager
 
 checkmark = "\u2713"
 crossmark = "\u2717"
@@ -40,6 +42,9 @@ class NoiseStabilityWindow(QWidget):
             self.state_manager.stateChanged.connect(parent.on_state_changed)
         self.plot_items = {"x": {}, "y": {}, "z": {}}
         axis = self.state_manager.get_state("axis")
+        
+        # Initialize worker manager
+        self.worker_manager = WorkerManager(self)
 
         self.layout = QGridLayout()
         self.setLayout(self.layout)
@@ -204,19 +209,36 @@ class NoiseStabilityWindow(QWidget):
         self.plotter.addLegend(labelTextSize="16pt")
 
     def identify_clicked(self):
-        bead_pos = self.state_manager.get_state("bead_pos")
-        axis = self.state_manager.get_state("axis")
-        bead_pos = bead_pos[:, :, axis]
-        plateaus = self.state_manager.get_state("plateaus")
+        """Start stability identification in background thread."""
         method = self.method_combo.currentText()
-        include = self.state_manager.get_state("inclusion")
         if method == "Hadamard Variance (HV)":
             method = "HV"
         elif method == "Allan Variance (AV)":
             method = "AV"
         else:
             return
-
+        
+        # Disable button during computation
+        self.identify_button.setEnabled(False)
+        QApplication.setOverrideCursor(Qt.WaitCursor)
+        
+        # Run computation in background
+        self.worker_manager.run_async(
+            self._compute_stability,
+            method,
+            on_result=self._update_stability_results,
+            on_error=self._handle_stability_error,
+            on_finished=lambda: self.identify_button.setEnabled(True)
+        )
+    
+    def _compute_stability(self, method):
+        """Compute trace stability (runs in worker thread)."""
+        bead_pos = self.state_manager.get_state("bead_pos")
+        axis = self.state_manager.get_state("axis")
+        bead_pos = bead_pos[:, :, axis]
+        plateaus = self.state_manager.get_state("plateaus")
+        include = self.state_manager.get_state("inclusion").copy()
+        
         bead_specs = self.state_manager.get_state("bead_specs")
         refbead_mask = (bead_specs["Type"] == BeadType.REFERENCE).to_numpy()
         include_mask = bead_specs["Include"].to_numpy()
@@ -232,15 +254,32 @@ class NoiseStabilityWindow(QWidget):
                 stable, alphaint = engine.is_trace_stable(trace, method)
                 include[bid, pid] = stable
                 alphas[rid, pid] = alphaint
-
+        
+        return {'include': include, 'alphas': alphas}
+    
+    def _update_stability_results(self, result):
+        """Update UI with stability results (runs in GUI thread)."""
+        include = result['include']
+        alphas = result['alphas']
+        
+        # Update checkboxes
+        for pid in range(include.shape[1]):
+            for rid, bid in enumerate(self.magnetic_idx):
                 checkbox = self.bead_table.cellWidget(rid, pid)
                 checkbox.blockSignals(True)
-                checkbox.setChecked(stable)
+                checkbox.setChecked(include[bid, pid])
                 checkbox.blockSignals(False)
-
+        
         self.state_manager.set_state("inclusion", include)
         self.state_manager.set_state("alphas", alphas)
         self.stable_regions.setText(str(include.sum()))
+        QApplication.restoreOverrideCursor()
+    
+    def _handle_stability_error(self, error_msg, traceback):
+        """Handle errors during stability computation."""
+        print(f"Error computing stability: {error_msg}")
+        print(traceback)
+        QApplication.restoreOverrideCursor()
 
     def select_all_clicked(self):
         """
@@ -263,3 +302,8 @@ class NoiseStabilityWindow(QWidget):
 
         self.state_manager.set_state("inclusion", include)
         self.stable_regions.setText("N/A")
+    
+    def closeEvent(self, event):
+        """Clean up threads when window is closed."""
+        self.worker_manager.cleanup()
+        event.accept()

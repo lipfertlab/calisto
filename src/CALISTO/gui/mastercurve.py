@@ -11,7 +11,9 @@ from PySide6.QtWidgets import (
     QFileDialog,
     QMessageBox,
     QLineEdit,
+    QApplication,
 )
+from PySide6.QtCore import Qt
 
 import pyqtgraph as pyg
 import numpy as np
@@ -32,6 +34,7 @@ from engines.engine import BeadType
 
 import engines.calibration_engine as engine
 import engines.fit_engine as fit
+from gui.worker import WorkerManager
 
 checkmark = "\u2713"
 crossmark = "\u2717"
@@ -45,7 +48,9 @@ class MasterCurvePlotterWindow(QWidget):
         if parent is not None:
             self.state_manager.stateChanged.connect(parent.on_state_changed)
 
-        self.measurements = engine.prepare_multibeadmeasurement(state_manager)
+        # Initialize worker manager
+        self.worker_manager = WorkerManager(self)
+        self.measurements = None
 
         self.layout = QHBoxLayout()
         self.setLayout(self.layout)
@@ -58,7 +63,27 @@ class MasterCurvePlotterWindow(QWidget):
         # self.zrange = self.plotter.getAxis("left").range
         self.force_ub = None
         self.fitparemeters = {}
+        
+        # Prepare measurements asynchronously
+        QApplication.setOverrideCursor(Qt.WaitCursor)
+        self.worker_manager.run_async(
+            engine.prepare_multibeadmeasurement,
+            state_manager,
+            on_result=self._measurements_ready,
+            on_error=self._handle_measurement_error
+        )
+    
+    def _measurements_ready(self, measurements):
+        """Called when measurements are ready (runs in GUI thread)."""
+        self.measurements = measurements
         self.plot_curves()
+        QApplication.restoreOverrideCursor()
+    
+    def _handle_measurement_error(self, error_msg, traceback):
+        """Handle errors during measurement preparation."""
+        QApplication.restoreOverrideCursor()
+        QMessageBox.critical(self, "Error", f"Error preparing measurements: {error_msg}")
+        print(traceback)
 
     def create_fcplotter(self):
         plotter = pyg.PlotWidget()
@@ -198,6 +223,10 @@ class MasterCurvePlotterWindow(QWidget):
         return np.array(magbeads)
 
     def plot_curves(self):
+        # Guard: Don't plot if measurements aren't ready yet
+        if self.measurements is None:
+            return
+        
         colors = {"PSD": "g", "AV": "r", "HV": "b"}
         fullmagpos, fullforces = engine.get_all_forces_v_magpos(self.state_manager)
 
@@ -365,6 +394,7 @@ class MasterCurvePlotterWindow(QWidget):
         """
         Override the closeEvent to handle window closing.
         """
+        self.worker_manager.cleanup()
         engine.clear_external_force_calibration_data(self.state_manager)
         event.accept()
 

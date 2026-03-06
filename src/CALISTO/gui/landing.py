@@ -22,6 +22,7 @@ import sys
 
 sys.path.append(str(Path(__file__).resolve().parent.parent))
 import engines.landing_engine as engine
+from gui.worker import WorkerManager
 from .fcalibration import FCWindow
 
 
@@ -36,6 +37,9 @@ class MainWindow(QMainWindow):
         self.state_manager = state_manager
         self.state_manager.stateChanged.connect(self.on_state_changed)
         self.path_maxlength = 27
+
+        # Initialize worker manager for async operations
+        self.worker_manager = WorkerManager(self)
 
         self.setWindowTitle(app_name)
 
@@ -222,12 +226,15 @@ class MainWindow(QMainWindow):
 
         self.txt_bead_tracepath = Path(self.txt_bead_tracepath)
         QGuiApplication.setOverrideCursor(QCursor(Qt.WaitCursor))
-        try:
-            engine.load_bead_datafile(self.txt_bead_tracepath, self.state_manager)
-            QGuiApplication.restoreOverrideCursor()
-        except Exception as e:
-            QGuiApplication.restoreOverrideCursor()
-            QMessageBox.critical(self, "Error", f"Error loading data file: {e}")
+
+        # Run file loading in background thread
+        self.worker_manager.run_async(
+            engine.load_bead_datafile,
+            self.txt_bead_tracepath,
+            self.state_manager,
+            on_result=lambda _: QGuiApplication.restoreOverrideCursor(),
+            on_error=self._handle_file_load_error,
+        )
 
         return
 
@@ -247,12 +254,15 @@ class MainWindow(QMainWindow):
 
         self.txt_bead_motorpath = Path(self.txt_bead_motorpath)
         QGuiApplication.setOverrideCursor(QCursor(Qt.WaitCursor))
-        try:
-            engine.load_motor_datafile(self.txt_bead_motorpath, self.state_manager)
-            QGuiApplication.restoreOverrideCursor()
-        except Exception as e:
-            QGuiApplication.restoreOverrideCursor()
-            QMessageBox.critical(self, "Error", f"Error loading data file: {e}")
+
+        # Run file loading in background thread
+        self.worker_manager.run_async(
+            engine.load_motor_datafile,
+            self.txt_bead_motorpath,
+            self.state_manager,
+            on_result=lambda _: QGuiApplication.restoreOverrideCursor(),
+            on_error=self._handle_file_load_error,
+        )
 
         return
 
@@ -272,14 +282,17 @@ class MainWindow(QMainWindow):
         self.hdf_datapath_label.setText(pathtext)
 
         self.hdf_datapath = Path(self.hdf_datapath)
-
         QGuiApplication.setOverrideCursor(QCursor(Qt.WaitCursor))
-        try:
-            engine.load_hdf_datafile(self.hdf_datapath, self.state_manager)
-            QGuiApplication.restoreOverrideCursor()
-        except Exception as e:
-            QGuiApplication.restoreOverrideCursor()
-            QMessageBox.critical(self, "Error", f"Error loading data file: {e}")
+        
+        # Run file loading in background thread
+        self.worker_manager.run_async(
+            engine.load_hdf_datafile,
+            self.hdf_datapath,
+            self.state_manager,
+            on_result=lambda _: QGuiApplication.restoreOverrideCursor(),
+            on_error=self._handle_file_load_error,
+        )
+
         return
 
     def getBeadRadius(self):
@@ -354,17 +367,39 @@ class MainWindow(QMainWindow):
             self.state_manager.delete_state("computed_fsample")
 
     def activate_FC(self):
-        try:
-            engine.verify_data_consistency(self.state_manager)
-        except Exception as e:
-            QMessageBox.critical(
-                self, "Error", f"Error verifying data consistency: {e}"
-            )
-            return
+        QGuiApplication.setOverrideCursor(QCursor(Qt.WaitCursor))
+
+        # Run data verification and preparation in background
+        self.worker_manager.run_async(
+            self._prepare_fc_window,
+            on_result=self._open_fc_window,
+            on_error=self._handle_fc_preparation_error,
+        )
+
+    def _prepare_fc_window(self):
+        """Prepare FC window data (runs in worker thread)."""
+        engine.verify_data_consistency(self.state_manager)
         engine.prepare_dataframe(self.state_manager)
+        return True
+
+    def _open_fc_window(self, _):
+        """Open FC window (runs in GUI thread)."""
+        QGuiApplication.restoreOverrideCursor()
         self.FCWindow = FCWindow(self.state_manager, self)
         self.FCWindow.show()
         self.hide()
+
+    def _handle_fc_preparation_error(self, error_msg, traceback):
+        """Handle errors during FC window preparation."""
+        QGuiApplication.restoreOverrideCursor()
+        QMessageBox.critical(
+            self, "Error", f"Error verifying data consistency: {error_msg}"
+        )
+
+    def _handle_file_load_error(self, error_msg, traceback):
+        """Handle errors during file loading."""
+        QGuiApplication.restoreOverrideCursor()
+        QMessageBox.critical(self, "Error", f"Error loading data file: {error_msg}")
 
     def setSetup(self, index):
         if index == -1:
@@ -386,3 +421,8 @@ class MainWindow(QMainWindow):
 
         for widget in self.configdependentwidgets:
             widget.setEnabled(True)
+
+    def closeEvent(self, event):
+        """Clean up threads when window is closed."""
+        self.worker_manager.cleanup()
+        event.accept()

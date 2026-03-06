@@ -26,6 +26,7 @@ from .mastercurve import MasterCurvePlotterWindow
 from .noisestability import NoiseStabilityWindow
 from .calibration import CalibrationPlotterWindow
 from .magposplotter import MagPosPlotterWindow
+from .worker import WorkerManager
 
 from pathlib import Path
 import sys
@@ -48,6 +49,9 @@ class FCWindow(QWidget):
 
         self.path_maxlength = 27
         self.state_manager = state_manager
+        
+        # Initialize worker manager
+        self.worker_manager = WorkerManager(self)
         self.state_manager.stateChanged.connect(self.on_state_changed)
 
         self.parent = parent
@@ -103,7 +107,9 @@ class FCWindow(QWidget):
         return col
 
     def closeEvent(self, event):
-        self.parent.show()
+        self.worker_manager.cleanup()
+        if self.parent is not None:
+            self.parent.show()
         event.accept()
 
     def create_manual_check_box(self):
@@ -550,7 +556,7 @@ class FCWindow(QWidget):
             return
 
         if file_type == FileType.HDF5:
-            self.offset_data_hdf5_info(self.state_manager)
+            self.offset_data_hdf5_info()
 
         return
 
@@ -591,21 +597,15 @@ class FCWindow(QWidget):
         self.rotation_plotter.show()
 
     def forces_per_bead_button_clicked(self):
-        _ = prepare_multibeadmeasurement(self.state_manager)
-
+        # Don't prepare measurements here - CalibrationPlotterWindow handles it asynchronously
         self.forces_per_bead_plotter = CalibrationPlotterWindow(
             self, self.state_manager
         )
-        measurements_outdated = self.state_manager.get_state("measurements_outdated")
-        if measurements_outdated:
-            self.forces_per_bead_plotter.refresh_measurements(self.state_manager)
         self.forces_per_bead_plotter.show()
 
     def force_calibration_curve_button_clicked(self):
-        _ = prepare_multibeadmeasurement(self.state_manager)
-
+        # Don't prepare measurements here - MasterCurvePlotterWindow handles it asynchronously
         self.master_curve_plotter = MasterCurvePlotterWindow(self, self.state_manager)
-
         self.master_curve_plotter.show()
 
     def identify_stable_regions_button_clicked(self):
@@ -681,12 +681,15 @@ class FCWindow(QWidget):
 
         self.hdf_datapath = Path(self.hdf_datapath)
         QGuiApplication.setOverrideCursor(QCursor(Qt.WaitCursor))
-        try:
-            engine.load_rot_hdfdatafile(self.hdf_datapath, self.state_manager)
-            QGuiApplication.restoreOverrideCursor()
-        except Exception as e:
-            QGuiApplication.restoreOverrideCursor()
-            QMessageBox.critical(self, "Error", f"Error loading data file: {e}")
+        
+        # Run file loading in background thread
+        self.worker_manager.run_async(
+            engine.load_rot_hdfdatafile,
+            self.hdf_datapath,
+            self.state_manager,
+            on_result=lambda _: QGuiApplication.restoreOverrideCursor(),
+            on_error=self._handle_file_load_error
+        )
 
         return
 
@@ -707,12 +710,15 @@ class FCWindow(QWidget):
 
         self.txt_bead_tracepath = Path(self.txt_bead_tracepath)
         QGuiApplication.setOverrideCursor(QCursor(Qt.WaitCursor))
-        try:
-            engine.load_rot_datafile(self.txt_bead_tracepath, self.state_manager)
-            QGuiApplication.restoreOverrideCursor()
-        except Exception as e:
-            QGuiApplication.restoreOverrideCursor()
-            QMessageBox.critical(self, "Error", f"Error loading data file: {e}")
+        
+        # Run file loading in background thread
+        self.worker_manager.run_async(
+            engine.load_rot_datafile,
+            self.txt_bead_tracepath,
+            self.state_manager,
+            on_result=lambda _: QGuiApplication.restoreOverrideCursor(),
+            on_error=self._handle_file_load_error
+        )
 
         return
 
@@ -732,14 +738,22 @@ class FCWindow(QWidget):
 
         self.txt_bead_motorpath = Path(self.txt_bead_motorpath)
         QGuiApplication.setOverrideCursor(QCursor(Qt.WaitCursor))
-        try:
-            engine.load_rot_motor_datafile(self.txt_bead_motorpath, self.state_manager)
-            QGuiApplication.restoreOverrideCursor()
-        except Exception as e:
-            QGuiApplication.restoreOverrideCursor()
-            QMessageBox.critical(self, "Error", f"Error loading data file: {e}")
+        
+        # Run file loading in background thread
+        self.worker_manager.run_async(
+            engine.load_rot_motor_datafile,
+            self.txt_bead_motorpath,
+            self.state_manager,
+            on_result=lambda _: QGuiApplication.restoreOverrideCursor(),
+            on_error=self._handle_file_load_error
+        )
 
         return
+    
+    def _handle_file_load_error(self, error_msg, traceback):
+        """Handle errors during file loading."""
+        QGuiApplication.restoreOverrideCursor()
+        QMessageBox.critical(self, "Error", f"Error loading data file: {error_msg}")
 
     def on_state_changed(self, state):
         self.get_force_calibration_status()

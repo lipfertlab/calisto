@@ -12,6 +12,7 @@ from PySide6.QtWidgets import (
     QGroupBox,
     QMessageBox,
     QFileDialog,
+    QApplication,
 )
 from PySide6.QtCore import Qt, Signal, QObject
 import pyqtgraph as pyg
@@ -30,6 +31,7 @@ sys.path.append(str(Path(__file__).resolve().parent.parent))
 from engines.engine import BeadType
 
 import engines.offset_engine as engine
+from gui.worker import WorkerManager
 
 checkmark = "\u2713"
 crossmark = "\u2717"
@@ -43,7 +45,8 @@ class OffsetPlotterWindow(QWidget):
         if parent is not None:
             self.state_manager.stateChanged.connect(parent.on_state_changed)
 
-        engine.process_raw_data(self.state_manager)
+        # Initialize worker manager
+        self.worker_manager = WorkerManager(self)
 
         self.layout = QHBoxLayout()
         self.setLayout(self.layout)
@@ -67,6 +70,20 @@ class OffsetPlotterWindow(QWidget):
 
         self.control_group = self.create_controls()
         self.layout.addWidget(self.control_group)
+        
+        # Process raw data asynchronously
+        QApplication.setOverrideCursor(Qt.WaitCursor)
+        self.worker_manager.run_async(
+            engine.process_raw_data,
+            self.state_manager,
+            on_result=lambda _: QApplication.restoreOverrideCursor(),
+            on_error=self._handle_processing_error
+        )
+    
+    def _handle_processing_error(self, error_msg, traceback):
+        """Handle errors during data processing."""
+        QApplication.restoreOverrideCursor()
+        QMessageBox.critical(self, "Error", f"Error processing raw data: {error_msg}")
 
     def closeEvent(self, event):
         # pop up a message box to ask if the user wants to save the current offsets
