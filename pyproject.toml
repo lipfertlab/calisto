@@ -23,7 +23,7 @@ dependencies = [
     "setuptools>=69",
 ]
 name = "CALISTO"
-version = "1.0.0"
+version = "0.1.0"
 authors = [{ name = "Alptug Ulugol" }, { name = "Stefanie Pritzl" }]
 description = "A Gui Application for the MT Force Calibration"
 readme = "README.md"
@@ -32,7 +32,7 @@ requires-python = "==3.12"
 classifiers = [
     "Programming Language :: Python :: 3",
     "Operating System :: OS Independent",
-    "Development Status :: 5 - Production/Stable",
+    "Development Status :: 4 - Beta",
     "License :: OSI Approved :: GNU General Public License v3 (GPLv3)",
 ]
 

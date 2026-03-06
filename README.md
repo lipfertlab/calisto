@@ -2,6 +2,10 @@
 
 **CALISTO** is a desktop GUI application for force calibration of Magnetic Tweezers (MT) experiments. It provides an interactive, step-by-step workflow for loading bead tracking data, inspecting traces, selecting reference beads, determining offsets, and extracting calibrated force–magnet position curves 
 
+> Disclaimer: CALISTO is currently a work in progress. Features, interfaces, and performance may change as development continues.
+
+
+
 ---
 
 ## Features
