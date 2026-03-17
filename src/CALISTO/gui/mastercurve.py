@@ -18,6 +18,8 @@ from PySide6.QtCore import Qt
 import pyqtgraph as pyg
 import numpy as np
 
+# import time
+
 
 pyg.setConfigOption("background", "w")
 pyg.setConfigOption("foreground", "k")
@@ -63,26 +65,28 @@ class MasterCurvePlotterWindow(QWidget):
         # self.zrange = self.plotter.getAxis("left").range
         self.force_ub = None
         self.fitparemeters = {}
-        
+
         # Prepare measurements asynchronously
         QApplication.setOverrideCursor(Qt.WaitCursor)
         self.worker_manager.run_async(
             engine.prepare_multibeadmeasurement,
             state_manager,
             on_result=self._measurements_ready,
-            on_error=self._handle_measurement_error
+            on_error=self._handle_measurement_error,
         )
-    
+
     def _measurements_ready(self, measurements):
         """Called when measurements are ready (runs in GUI thread)."""
         self.measurements = measurements
         self.plot_curves()
         QApplication.restoreOverrideCursor()
-    
+
     def _handle_measurement_error(self, error_msg, traceback):
         """Handle errors during measurement preparation."""
         QApplication.restoreOverrideCursor()
-        QMessageBox.critical(self, "Error", f"Error preparing measurements: {error_msg}")
+        QMessageBox.critical(
+            self, "Error", f"Error preparing measurements: {error_msg}"
+        )
         print(traceback)
 
     def create_fcplotter(self):
@@ -226,10 +230,13 @@ class MasterCurvePlotterWindow(QWidget):
         # Guard: Don't plot if measurements aren't ready yet
         if self.measurements is None:
             return
-        
-        colors = {"PSD": "g", "AV": "r", "HV": "b"}
-        fullmagpos, fullforces = engine.get_all_forces_v_magpos(self.state_manager)
 
+        colors = {"PSD": "g", "AV": "r", "HV": "b"}
+        # t0 = time.perf_counter()
+        fullmagpos, fullforces = engine.get_all_forces_v_magpos(self.state_manager)
+        # print(
+        #     f"get_all_forces_v_magpos took {time.perf_counter() - t0:.4f} s", flush=True
+        # )
 
         self.fcplotter.clear()
         for idx, method in enumerate(["PSD", "AV", "HV"]):

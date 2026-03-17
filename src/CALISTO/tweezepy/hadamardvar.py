@@ -8,7 +8,7 @@ import numpy as np
 import scipy
 
 try:
-    from numba import njit
+    from numba import njit, prange
 except ImportError:  # pragma: no cover - numba is an optional speedup
 
     def njit(*args, **kwargs):
@@ -17,12 +17,16 @@ except ImportError:  # pragma: no cover - numba is an optional speedup
 
         return decorator
 
+    prange = range
+
 
 from warnings import warn
 from tweezepy.allanvar import m_generator, noise_id, edf_greenhall, edf_approx
 
+prange = range
 
-@njit(cache=True)
+
+@njit(cache=True, fastmath=True)
 def calc_hvar_phase(phase, rate, mj, stride):
     """main calculation fungtion for HDEV and OHDEV
     Parameters
@@ -101,10 +105,11 @@ def calc_hvar_phase(phase, rate, mj, stride):
     return h
 
 
-@njit(cache=True)
+# @njit(cache=True, parallel=True, fastmath=True)
+@njit(cache=True, fastmath=True)
 def calc_hvar_phase_batch(phase, rate, m_values, stride_values):
     out = np.empty(m_values.shape[0], dtype=np.float64)
-    for idx in range(m_values.shape[0]):
+    for idx in prange(m_values.shape[0]):
         out[idx] = calc_hvar_phase(phase, rate, m_values[idx], stride_values[idx])
     return out
 
@@ -158,7 +163,9 @@ def hvar(data, rate=1.0, taus="octave", overlapping=True, edf="real"):
             if N // mj > 32:
                 alpha_int = noise_id(data, mj)[0]
                 if (alpha_int < 3) and (alpha_int > -5):
-                    edfs[i] = edf_greenhall(alpha_int, 3, mj, N, overlapping=overlapping)
+                    edfs[i] = edf_greenhall(
+                        alpha_int, 3, mj, N, overlapping=overlapping
+                    )
                 else:
                     # warn(
                     #     "Real edf failed to identify noise for %s. Falling back to approximate edf."

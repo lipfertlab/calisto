@@ -1,9 +1,5 @@
 # CALISTO — Copyright (C) 2026 Alptuğ Ulugöl and Stefanie Pritzl
 # Licensed under the GNU General Public License v3.0 — see LICENSE
-import os
-import multiprocessing
-from concurrent.futures import ProcessPoolExecutor
-
 import numpy as np
 from scipy.optimize import curve_fit
 from .engine import BeadType, MultiBeadMeasurement
@@ -137,43 +133,18 @@ def fit_wlc(x, y, temperatue, p0=None, wlcfit_cutoff_force=10, n_trial=100):
     return bestpopt
 
 
-def _compute_measurement_forces(m):
-    """Compute forces for all methods on a single MultiBeadMeasurement.
-
-    Top-level function so it is picklable across process boundaries.
-    Returns (forces_by_method, magpos).
-    """
-    forces_by_method = {}
-    last_force = None
-    for method in ["PSD", "AV", "HV"]:
-        force = m.get_forces(method)
-        last_force = force
-        if force.size == 0:
-            continue
-        forces_by_method[method] = force
-    magpos = m.mag_pos * np.ones(last_force.shape[0])
-    return forces_by_method, magpos
-
-
 def get_all_forces_v_magpos(state_manager):
     measurements = prepare_multibeadmeasurement(state_manager)
 
-    if len(measurements) > 1:
-        n_workers = ((os.cpu_count() or 1)*2) // 3  # Use 2/3 of available cores for multiprocessing
-        n_workers = min(len(measurements), n_workers)
-        ctx = multiprocessing.get_context("spawn")
-        chunksize =  len(measurements) // n_workers + 1 
-        with ProcessPoolExecutor(max_workers=n_workers, mp_context=ctx) as pool:
-            results = list(pool.map(_compute_measurement_forces, measurements, chunksize=chunksize))
-    else:
-        results = [_compute_measurement_forces(m) for m in measurements]
-
     fullmagpos = np.array([])
     fullforces = {"PSD": [], "AV": [], "HV": []}
-    for forces_by_method, magpos in results:
+    for m in measurements:
         for method in ["PSD", "AV", "HV"]:
-            if method in forces_by_method:
-                fullforces[method].append(forces_by_method[method])
+            force = m.get_forces(method)
+            if force.size == 0:
+                continue
+            fullforces[method].append(force)
+        magpos = m.mag_pos * np.ones(force.shape[0])
         fullmagpos = np.hstack((fullmagpos, magpos))
 
     extmagpos = state_manager.get_state("ext_mag_pos")
