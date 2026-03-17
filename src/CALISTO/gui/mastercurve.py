@@ -330,7 +330,8 @@ class MasterCurvePlotterWindow(QWidget):
                     name=f"{method} fit",
                 )
 
-            except:
+            except Exception as e:
+                print(f"Error fitting master curve for {method}: {e}")
                 self.fitparemeterslabel[method][0].setText("N/A")
                 self.fitparemeterslabel[method][2].setText("N/A")
                 self.fitparemeterslabel[method][1].setText("N/A")

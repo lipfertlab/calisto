@@ -325,11 +325,15 @@ class SingleBeadMeasurement:
                 gs = np.array([r["g"] for r in ress])
                 gerrs = np.array([r["g_error"] for r in ress])
 
-                kvar = 1.0 / np.sum(kerrs ** (-2))
-                k = kvar * np.sum(ks * kerrs ** (-2))
+                # Guard against zero errors causing inf/NaN in inverse-variance weighting
+                kerrs = np.where(kerrs == 0, np.nan, kerrs)
+                gerrs = np.where(gerrs == 0, np.nan, gerrs)
 
-                gvar = 1.0 / np.sum(gerrs ** (-2))
-                g = kvar * np.sum(gs * gerrs ** (-2))
+                kvar = 1.0 / np.nansum(kerrs ** (-2))
+                k = kvar * np.nansum(ks * kerrs ** (-2))
+
+                gvar = 1.0 / np.nansum(gerrs ** (-2))
+                g = gvar * np.nansum(gs * gerrs ** (-2))
 
                 res = {
                     "k": k,
@@ -351,8 +355,8 @@ class SingleBeadMeasurement:
                 variance = tvar(self.trace[self.ax])
                 variance_err = variance / np.sqrt(0.5 * (len(self.trace[self.ax]) - 1))
 
-                kest = kT / variance
-                kerr = kest * np.sqrt(variance_err) / variance
+                kest = kT / variance if variance != 0 else np.nan
+                kerr = kest * np.sqrt(variance_err) / variance if variance != 0 else np.nan
 
                 res = {"k": kest, "k_error": kerr, "g": np.nan, "g_error": np.nan}
                 self._EoMparams[method] = res
@@ -393,8 +397,10 @@ class SingleBeadMeasurement:
             self._force[method] = np.array([0.0, 0.0])
 
             self._force[method][0] = kappa[0] * zpos["mean"]
+            zmean = zpos["mean"] if zpos["mean"] != 0 else np.nan
+            k0 = kappa[0] if kappa[0] != 0 else np.nan
             self._force[method][1] = np.abs(self._force[method][0]) * np.sqrt(
-                (zpos["stderr"] / zpos["mean"]) ** 2 + (kappa[1] / kappa[0]) ** 2
+                (zpos["stderr"] / zmean) ** 2 + (kappa[1] / k0) ** 2
             )
 
             self.outdated["force"] = False
@@ -405,6 +411,8 @@ class SingleBeadMeasurement:
         k, g, _ = self.get_EoM_parameters(
             method, correct_tracking_error=correct_tracking_error
         )
+        if g[0] == 0 or k[0] == 0:
+            return np.nan
         cA = kT / (2.0 * np.pi * np.pi * g[0])
         fc = k[0] / (2.0 * np.pi * g[0])
         fn = 0.5 * self.fs
@@ -643,8 +651,10 @@ class MultiBeadMeasurement(MutableMapping):
                 kappas, self.force[method], zpos["mean"], zpos["stderr"]
             ):
                 force[0] = kappa[0] * z_m
+                zm_safe = z_m if z_m != 0 else np.nan
+                k0_safe = kappa[0] if kappa[0] != 0 else np.nan
                 force[1] = np.abs(force[0]) * np.sqrt(
-                    (z_e / z_m) ** 2 + (kappa[1] / kappa[0]) ** 2
+                    (z_e / zm_safe) ** 2 + (kappa[1] / k0_safe) ** 2
                 )
 
         return self.force[method]

@@ -328,8 +328,8 @@ class CalibrationPlotterWindow(QWidget):
                     "success": wlc_success,
                     "x": wlc_fitext,
                     "y": wlc_fitforces,
-                    "Lp": round(Lp, 2) if Lp else None,
-                    "Lc": round(Lc, 2) if Lc else None,
+                    "Lp": round(Lp, 2) if Lp is not None else None,
+                    "Lc": round(Lc, 2) if Lc is not None else None,
                 },
             }
 

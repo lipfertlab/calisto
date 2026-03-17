@@ -274,11 +274,14 @@ def totvar(data, rate=1.0, taus="octave", edf="approx"):
         for idx, mj in enumerate(m):
             if N // mj >= 32:
                 alpha_int = noise_id(data, mj)[0]
-            tvars[idx] /= 1 - totvar_bias(alpha_int) * (mj / N)
-            if (alpha_int <= 0) and (alpha_int >= -2):
-                edfs[idx] = edf_totdev(N, mj, alpha_int)
+                tvars[idx] /= 1 - totvar_bias(alpha_int) * (mj / N)
+                if (alpha_int <= 0) and (alpha_int >= -2):
+                    edfs[idx] = edf_totdev(N, mj, alpha_int)
+                else:
+                    warn("Real edf failed for %s." % mj)
+                    edfs[idx] = edf_approx(N, mj)
             else:
-                warn("Real edf failed for %s." % mj)
+                warn("Real edf failed for %s. Falling back to approximate edf." % mj)
                 edfs[idx] = edf_approx(N, mj)
     return taus, edfs, tvars
 

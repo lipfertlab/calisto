@@ -574,7 +574,7 @@ class FCWindow(QWidget):
             min_offset = -np.inf if mintext == "" else float(mintext)
             maxtext = self.offset_filter_max.text()
             max_offset = np.inf if maxtext == "" else float(maxtext)
-        except:
+        except ValueError:
             return
 
         last_mod = self.state_manager.get_state("last_modified")

@@ -181,7 +181,7 @@ class NoiseStabilityWindow(QWidget):
                 index, QItemSelectionModel.Select | QItemSelectionModel.Current
             )
             self.bead_table.blockSignals(False)
-        except:
+        except (ValueError, IndexError, KeyError, TypeError):
             return
 
         bead_pos = self.state_manager.get_state("bead_pos")
@@ -196,7 +196,10 @@ class NoiseStabilityWindow(QWidget):
         refbead_mask = (bead_specs["Type"] == BeadType.REFERENCE).to_numpy()
         include_mask = bead_specs["Include"].to_numpy()
         refbead_mask = refbead_mask & include_mask
-        reftrace = bead_pos[:, refbead_mask].mean(axis=1)
+        if refbead_mask.any():
+            reftrace = bead_pos[:, refbead_mask].mean(axis=1)
+        else:
+            reftrace = np.zeros(bead_pos.shape[0])
 
         trace = bead_pos[:, bid] - reftrace
 
@@ -247,7 +250,10 @@ class NoiseStabilityWindow(QWidget):
 
         for pid, pl in enumerate(plateaus):
             trace_g = bead_pos[pl]
-            reftrace = trace_g[:, refmask].mean(axis=1)
+            if refmask.any():
+                reftrace = trace_g[:, refmask].mean(axis=1)
+            else:
+                reftrace = np.zeros(trace_g.shape[0])
 
             for rid, bid in enumerate(self.magnetic_idx):
                 trace = trace_g[:, bid] - reftrace
