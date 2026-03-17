@@ -230,6 +230,7 @@ class MasterCurvePlotterWindow(QWidget):
         colors = {"PSD": "g", "AV": "r", "HV": "b"}
         fullmagpos, fullforces = engine.get_all_forces_v_magpos(self.state_manager)
 
+
         self.fcplotter.clear()
         for idx, method in enumerate(["PSD", "AV", "HV"]):
             errorbar = pyg.ErrorBarItem(

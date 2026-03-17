@@ -160,16 +160,16 @@ def hvar(data, rate=1.0, taus="octave", overlapping=True, edf="real"):
                 if (alpha_int < 3) and (alpha_int > -5):
                     edfs[i] = edf_greenhall(alpha_int, 3, mj, N, overlapping=overlapping)
                 else:
-                    warn(
-                        "Real edf failed to identify noise for %s. Falling back to approximate edf."
-                        % mj
-                    )
+                    # warn(
+                    #     "Real edf failed to identify noise for %s. Falling back to approximate edf."
+                    #     % mj
+                    # )
                     edfs[i] = edf_approx(N, mj)
             else:
-                warn(
-                    "Real edf failed to identify noise for %s. Falling back to approximate edf."
-                    % mj
-                )
+                # warn(
+                #     "Real edf failed to identify noise for %s. Falling back to approximate edf."
+                #     % mj
+                # )
                 edfs[i] = edf_approx(N, mj)
     elif edf == "approx":
         edfs = edf_approx(N, m)

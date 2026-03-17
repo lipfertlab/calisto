@@ -165,16 +165,16 @@ def avar(data, rate=1.0, taus="octave", overlapping=True, edf="approx"):
                 if (alpha_int < 3) and (alpha_int > -3):
                     edfs[i] = edf_greenhall(alpha_int, 2, mj, N)
                 else:
-                    warn(
-                        "Real edf failed to identify noise for %s. Falling back to approximate edf."
-                        % mj
-                    )
+                    # warn(
+                    #     "Real edf failed to identify noise for %s. Falling back to approximate edf."
+                    #     % mj
+                    # )
                     edfs[i] = edf_approx(N, mj)
             else:
-                warn(
-                    "Real edf failed to identify noise for %s. Falling back to approximate edf."
-                    % mj
-                )
+                # warn(
+                #     "Real edf failed to identify noise for %s. Falling back to approximate edf."
+                #     % mj
+                # )
                 edfs[i] = edf_approx(N, mj)
     elif edf == "approx":
         edfs = edf_approx(N, m)
