@@ -66,18 +66,48 @@ class MasterCurvePlotterWindow(QWidget):
         self.force_ub = None
         self.fitparemeters = {}
 
-        # Prepare measurements asynchronously
+        self.fullmagpos = None
+        self.fullforces = None
+
+        # # Prepare measurements asynchronously
+        # QApplication.setOverrideCursor(Qt.WaitCursor)
+        # self.worker_manager.run_async(
+        #     engine.prepare_multibeadmeasurement,
+        #     state_manager,
+        #     on_result=self._measurements_ready,
+        #     on_error=self._handle_measurement_error,
+        # )
+        self.measurements = engine.prepare_multibeadmeasurement(self.state_manager)
+        self.extmagpos = self.state_manager.get_state("ext_mag_pos")
+        self.extforces = self.state_manager.get_state("ext_forces")
         QApplication.setOverrideCursor(Qt.WaitCursor)
         self.worker_manager.run_async(
-            engine.prepare_multibeadmeasurement,
-            state_manager,
-            on_result=self._measurements_ready,
+            engine._get_all_forces_v_magpos,
+            self.measurements,
+            self.extmagpos,
+            self.extforces,
+            on_result=self._force_ready,
             on_error=self._handle_measurement_error,
         )
+
 
     def _measurements_ready(self, measurements):
         """Called when measurements are ready (runs in GUI thread)."""
         self.measurements = measurements
+        self.extmagpos = self.state_manager.get_state("ext_mag_pos")
+        self.extforces = self.state_manager.get_state("ext_forces")
+
+        self.worker_manager.run_async(
+            engine._get_all_forces_v_magpos,
+            self.measurements,
+            self.extmagpos,
+            self.extforces,
+            on_result=self._force_ready,
+            on_error=self._handle_measurement_error,
+        )
+
+    def _force_ready(self, result):
+        self.fullmagpos, self.fullforces, self.measurements = result
         self.plot_curves()
         QApplication.restoreOverrideCursor()
 
@@ -230,14 +260,16 @@ class MasterCurvePlotterWindow(QWidget):
         # Guard: Don't plot if measurements aren't ready yet
         if self.measurements is None:
             return
+        if self.fullmagpos is None or self.fullforces is None:
+            return
 
         colors = {"PSD": "g", "AV": "r", "HV": "b"}
         # t0 = time.perf_counter()
-        fullmagpos, fullforces = engine.get_all_forces_v_magpos(self.state_manager)
+        # fullmagpos, fullforces = engine.get_all_forces_v_magpos(self.state_manager)
         # print(
         #     f"get_all_forces_v_magpos took {time.perf_counter() - t0:.4f} s", flush=True
         # )
-
+        fullmagpos, fullforces = self.fullmagpos, self.fullforces
         self.fcplotter.clear()
         for idx, method in enumerate(["PSD", "AV", "HV"]):
             errorbar = pyg.ErrorBarItem(

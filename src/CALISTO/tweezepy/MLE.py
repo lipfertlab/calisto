@@ -2,13 +2,64 @@
 This file is part of tweezepy.py
 """
 
-from autograd import hessian
 from autograd.scipy.stats import gamma
+from autograd import hessian
 from inspect import signature
 from scipy.optimize import minimize
 from scipy import stats
+import numpy as _real_np
 
 import autograd.numpy as np
+
+
+def _small_matrix_inv(M):
+    """Invert a small matrix using pure Python (no LAPACK).
+
+    On macOS the Accelerate BLAS/LAPACK backend uses Grand Central Dispatch
+    which deadlocks when called from a QThread while the Qt event loop owns
+    the main dispatch queue.  For the 2×2 and 3×3 matrices produced by our
+    MLE fits we can compute the inverse with simple closed-form formulae,
+    avoiding LAPACK entirely.
+    """
+    n = M.shape[0]
+    if n == 1:
+        return _real_np.array([[1.0 / M[0, 0]]])
+    if n == 2:
+        a, b = M[0, 0], M[0, 1]
+        c, d = M[1, 0], M[1, 1]
+        det = float(a * d - b * c)
+        return _real_np.array([[d, -b], [-c, a]]) / det
+
+    raise ValueError("Matrix inversion only implemented for 1×1 and 2×2 matrices.")
+    # if n == 3:
+    #     a = M
+    #     det = float(
+    #         a[0,0]*(a[1,1]*a[2,2] - a[1,2]*a[2,1])
+    #       - a[0,1]*(a[1,0]*a[2,2] - a[1,2]*a[2,0])
+    #       + a[0,2]*(a[1,0]*a[2,1] - a[1,1]*a[2,0])
+    #     )
+    #     inv = _real_np.empty((3, 3))
+    #     inv[0,0] = a[1,1]*a[2,2] - a[1,2]*a[2,1]
+    #     inv[0,1] = a[0,2]*a[2,1] - a[0,1]*a[2,2]
+    #     inv[0,2] = a[0,1]*a[1,2] - a[0,2]*a[1,1]
+    #     inv[1,0] = a[1,2]*a[2,0] - a[1,0]*a[2,2]
+    #     inv[1,1] = a[0,0]*a[2,2] - a[0,2]*a[2,0]
+    #     inv[1,2] = a[0,2]*a[1,0] - a[0,0]*a[1,2]
+    #     inv[2,0] = a[1,0]*a[2,1] - a[1,1]*a[2,0]
+    #     inv[2,1] = a[0,1]*a[2,0] - a[0,0]*a[2,1]
+    #     inv[2,2] = a[0,0]*a[1,1] - a[0,1]*a[1,0]
+    #     return inv / det
+    # # Fallback for larger matrices — use Gauss-Jordan (pure Python, no LAPACK)
+    # A = _real_np.hstack([M.astype(float), _real_np.eye(n)])
+    # for col in range(n):
+    #     pivot = _real_np.argmax(_real_np.abs(A[col:, col])) + col
+    #     A[[col, pivot]] = A[[pivot, col]]
+    #     A[col] = A[col] / A[col, col]
+    #     for row in range(n):
+    #         if row != col:
+    #             A[row] -= A[row, col] * A[col]
+    # return A[:, n:]
+
 
 class MCMC:
     """
@@ -205,9 +256,9 @@ class MLEfit(MCMC):
     """
     def __init__(self, pedantic = True, scale_covar = False, minimizer_kwargs = {}):
         if pedantic == False:
-            np.seterr('warn')
+            _real_np.seterr('warn')
         elif pedantic == True:
-            np.seterr('ignore')
+            _real_np.seterr('ignore')
         # Fancy way of determining fit param names        
         names = signature(self.func).parameters # inspect fit function parameters
         self.names = list(names.keys()) # make list of parameter names
@@ -221,8 +272,6 @@ class MLEfit(MCMC):
         self.logL = lambda p: self.gd.logpdf(self.func(*p)).sum()
         # Negative log likelihood
         self.negLL =  lambda p: -self.logL(p)
-        # Use automatic differentiation to calculate hessian
-        hess = hessian(self.negLL)
         # Minimize negative log likelihood
         self.fit = minimize(self.negLL,x0=self.guess,method = 'Nelder-Mead',**minimizer_kwargs)
         # Save minimizer fit results
@@ -234,10 +283,10 @@ class MLEfit(MCMC):
         # Throw warning if fit fails
         if not self.success:
             print('MLE fitting failed to converge. %s'%self.fit['message'])
-            #self.params = np.array([float('nan') for i in range(self.nparams)])
-            #self.std_errors = np.array([float('nan') for i in range(self.nparams)])
-        # Compute standard errors by inverting the Hessian
-        inv_hessian = np.linalg.inv(hess(self.params))
+        # Compute Hessian via autograd
+        hess = hessian(self.negLL)(self.params)
+        # Pure-Python inverse — avoids macOS Accelerate/GCD deadlock in QThread
+        inv_hessian = _small_matrix_inv(_real_np.asarray(hess))
         # Covariance matrix
         self.cov = 2. * inv_hessian
         # Calculate errors from diagonals of covariance matrix

@@ -526,6 +526,50 @@ class MultiBeadMeasurement(MutableMapping):
         self.force = {}
         self.gamma = {}
 
+    def copy(self):
+        """Return a lightweight copy suitable for independent computation.
+
+        Trace arrays (which are never mutated by force computation) are
+        shared, while all mutable result dicts are freshly allocated so
+        the copy can be computed on a worker thread without racing the
+        original.
+        """
+        clone = object.__new__(MultiBeadMeasurement)
+        clone.fs = self.fs
+        clone.mag_pos = self.mag_pos
+        clone.mag_rot = self.mag_rot
+        clone.ax = self.ax
+        clone.radius = self.radius
+        clone.nbeads = self.nbeads
+        clone.bead_ids = self.bead_ids
+        clone.refbead_ids = self.refbead_ids
+        clone.traces = self.traces          # shared (read-only during computation)
+        clone.reference_traces = self.reference_traces
+        clone.ref_subtracted = self.ref_subtracted
+        clone.extension = {}
+        clone.kappa = {}
+        clone.force = {}
+        clone.gamma = {}
+
+        clone.bead = {}
+        for bid, sbm in self.bead.items():
+            s = object.__new__(SingleBeadMeasurement)
+            s.fs = sbm.fs
+            s.ax = sbm.ax
+            s.radius = sbm.radius
+            s.trace = sbm.trace              # shared (read-only)
+            s.refbead = sbm.refbead
+            s.good = sbm.good
+            s.ref_subtracted = sbm.ref_subtracted
+            s.offset_subtracted = sbm.offset_subtracted
+            s.outdated = {"eom": False, "ext": False, "force": False}
+            s._extension = None
+            s._EoMparams = {}
+            s._force = {}
+            clone.bead[bid] = s
+
+        return clone
+
     def __getitem__(self, id):
         return self.bead[id]
 
