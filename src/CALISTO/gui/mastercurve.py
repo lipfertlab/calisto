@@ -68,6 +68,9 @@ class MasterCurvePlotterWindow(QWidget):
         self.fullmagpos = None
         self.fullforces = None
 
+        self.expfitres = None
+        self.dexpfitres = None
+
         # # Prepare measurements asynchronously
         # QApplication.setOverrideCursor(Qt.WaitCursor)
         # self.worker_manager.run_async(
@@ -102,7 +105,7 @@ class MasterCurvePlotterWindow(QWidget):
 
     def _forces_ready(self, result):
         """Called when force computation is done (runs in GUI thread)."""
-        self.fullmagpos, self.fullforces = result
+        self.fullmagpos, self.fullforces, self.measurements = result
         print("Forces ready, plotting curves...")
         self.plot_curves()
         QApplication.restoreOverrideCursor()
@@ -292,9 +295,15 @@ class MasterCurvePlotterWindow(QWidget):
                     self.state_manager.get_state("master_curve_model")
                     == "Double Exponential"
                 ):
-                    dexpfit = fit.fit_double_exp_multiplicative(
-                        fullmagpos[mask], fullforces[method][mask, 0]
-                    )
+                    if self.dexpfitres is not None and method in self.dexpfitres:
+                        dexpfit = self.dexpfitres[method]
+                    else:
+                        dexpfit = fit.fit_double_exp_multiplicative(
+                            fullmagpos[mask], fullforces[method][mask, 0]
+                        )
+                        self.dexpfitres = self.dexpfitres or {}
+                        self.dexpfitres[method] = dexpfit
+
                     fmax = dexpfit["Fmax"]
                     l1 = dexpfit["tau_fast"]
                     l2 = dexpfit["tau_slow"]
@@ -327,9 +336,15 @@ class MasterCurvePlotterWindow(QWidget):
                     self.state_manager.get_state("master_curve_model")
                     == "Single Exponential"
                 ):
-                    sexpfit = fit.fit_single_exp_multiplicative(
-                        fullmagpos[mask], fullforces[method][mask, 0]
-                    )
+                    if self.expfitres is not None and method in self.expfitres:
+                        sexpfit = self.expfitres[method]
+                    else:
+                        sexpfit = fit.fit_single_exp_multiplicative(
+                            fullmagpos[mask], fullforces[method][mask, 0]
+                        )
+                        self.expfitres = self.expfitres or {}
+                        self.expfitres[method] = sexpfit
+
                     fmax = sexpfit["A"]
                     l1 = sexpfit["tau"]
 
@@ -444,4 +459,6 @@ class MasterCurvePlotterWindow(QWidget):
             )
             return
         self.force_ub = ub
+        self.dexpfitres = None
+        self.expfitres = None
         self.plot_curves()

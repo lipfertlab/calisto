@@ -176,13 +176,14 @@ def compute_forces_from_measurements(measurements, state_manager):
         magpos = m.mag_pos * np.ones(force.shape[0])
         fullmagpos = np.hstack((fullmagpos, magpos))
     print(f"[TIMER] force loop: {_time.perf_counter() - _t0:.3f}s", flush=True)
-
+    extmagpos = state_manager.get_state("ext_mag_pos")
     if extmagpos is not None:
         fullmagpos = np.hstack((extmagpos, fullmagpos))
 
     for method in ["PSD", "AV", "HV"]:
         fullforces[method] = np.vstack(fullforces[method])
-
+        
+    extforces = state_manager.get_state("ext_forces")
     if extforces is not None:
         for method in ["PSD", "AV", "HV"]:
             fullforces[method] = np.vstack((extforces[method], fullforces[method]))

@@ -23,9 +23,26 @@ def process_raw_data(state_manager):
 
     state_manager.set_state("offset_traces", ztraces)
 
+from scipy.signal import savgol_filter
+from tweezepy import AV
+def moving_average(a, n=3):
+    ret = np.cumsum(a, dtype=float)
+    ret[n:] = ret[n:] - ret[:-n]
+    return ret[n - 1:] / n
+
+def smoothmin(trc, wdivisor=2,polyo=3,windowmin=10):
+    av = AV(trc,1)
+    _taus = av.data['x']
+    _adev = av.data['y']
+    owl = max(windowmin,int(_taus[np.argmax(_adev)])//wdivisor)
+    smooth_trace = savgol_filter(trc, window_length=owl, polyorder=polyo)
+    # smooth_trace = moving_average(trc, n=owl)
+    absmin = np.min(trc)
+    smtmin = np.min(smooth_trace)
+    return max(absmin, smtmin)
 
 def get_minimum_offset(trace):
-    return trace.min()
+    return smoothmin(trace)
 
 
 def step_fitfunc(x, widthl, widthr, mean):

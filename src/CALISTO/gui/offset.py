@@ -76,7 +76,7 @@ class OffsetPlotterWindow(QWidget):
         self.worker_manager.run_async(
             engine.process_raw_data,
             self.state_manager,
-            on_result=lambda _: QApplication.restoreOverrideCursor(),
+            on_result=self._on_results_ready,
             on_error=self._handle_processing_error
         )
     
@@ -84,6 +84,10 @@ class OffsetPlotterWindow(QWidget):
         """Handle errors during data processing."""
         QApplication.restoreOverrideCursor()
         QMessageBox.critical(self, "Error", f"Error processing raw data: {error_msg}")
+
+    def _on_results_ready(self, result):
+        QApplication.restoreOverrideCursor()
+        self.bead_id_changed()
 
     def closeEvent(self, event):
         # pop up a message box to ask if the user wants to save the current offsets
@@ -167,7 +171,7 @@ class OffsetPlotterWindow(QWidget):
         control_layout.addWidget(self.next_button, 3, 1)
         self.next_button.clicked.connect(self.next_bead)
 
-        self.bead_id_changed()
+        # self.bead_id_changed()
 
         return control_group
 
