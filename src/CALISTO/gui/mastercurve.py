@@ -68,9 +68,6 @@ class MasterCurvePlotterWindow(QWidget):
         self.fullmagpos = None
         self.fullforces = None
 
-        self.fullmagpos = None
-        self.fullforces = None
-
         # # Prepare measurements asynchronously
         # QApplication.setOverrideCursor(Qt.WaitCursor)
         # self.worker_manager.run_async(
@@ -264,12 +261,6 @@ class MasterCurvePlotterWindow(QWidget):
         fullforces = self.fullforces
         colors = {"PSD": "g", "AV": "r", "HV": "b"}
 
-        # t0 = time.perf_counter()
-        # fullmagpos, fullforces = engine.get_all_forces_v_magpos(self.state_manager)
-        # print(
-        #     f"get_all_forces_v_magpos took {time.perf_counter() - t0:.4f} s", flush=True
-        # )
-        fullmagpos, fullforces = self.fullmagpos, self.fullforces
         self.fcplotter.clear()
         for idx, method in enumerate(["PSD", "AV", "HV"]):
             errorbar = pyg.ErrorBarItem(
