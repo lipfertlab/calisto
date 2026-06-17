@@ -132,7 +132,7 @@ class FCWindow(QWidget):
             "Plot magnet positions and partition them into constant force plateaus"
         )
         self.plot_magnet_button.clicked.connect(self.plot_magnet_button_clicked)
-        layout.addWidget(self.plot_magnet_button, 1, 0)
+        layout.addWidget(self.plot_magnet_button, 2, 0)
 
         self.identify_suitable_reference_beads_button = QPushButton(
             "Identify Suitable Reference Beads"
@@ -143,7 +143,7 @@ class FCWindow(QWidget):
         self.identify_suitable_reference_beads_button.clicked.connect(
             self.identify_suitable_reference_beads_button_clicked
         )
-        layout.addWidget(self.identify_suitable_reference_beads_button, 2, 0)
+        layout.addWidget(self.identify_suitable_reference_beads_button, 1, 0)
 
         self.identify_stable_regions_button = QPushButton("Identify Stable Regions")
         self.identify_stable_regions_button.setToolTip("Identify stable regions")
