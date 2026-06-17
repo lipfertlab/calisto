@@ -6,6 +6,24 @@ from .engine import BeadType, MultiBeadMeasurement
 import yaml
 import pickle as pkl
 import pandas as pd
+import sys
+import multiprocessing as mp
+
+# Module-level shared data for fork-based workers (zero-copy via COW)
+_fork_measurements = None
+
+
+def _compute_forces_worker(arg):
+    """Compute PSD/AV/HV forces for one measurement.
+
+    arg is an int index (fork) referencing _fork_measurements,
+    or a MultiBeadMeasurement directly (spawn).
+    """
+    m = _fork_measurements[arg] if isinstance(arg, int) else arg
+    forces = {}
+    for method in ["PSD", "AV", "HV"]:
+        forces[method] = m.get_forces(method)
+    return m.mag_pos, forces
 
 
 def prepare_multibeadmeasurement(state_manager):
@@ -135,9 +153,20 @@ def fit_wlc(x, y, temperatue, p0=None, wlcfit_cutoff_force=10, n_trial=100):
 
 def get_all_forces_v_magpos(state_manager):
     measurements = prepare_multibeadmeasurement(state_manager)
+    return compute_forces_from_measurements(measurements, state_manager)
 
+
+def compute_forces_from_measurements(measurements, state_manager):
+    """Compute forces vs magpos from pre-built measurements.
+
+    This is the pure-computation part of get_all_forces_v_magpos,
+    safe to call from a worker thread (no set_state calls).
+    """
     fullmagpos = np.array([])
     fullforces = {"PSD": [], "AV": [], "HV": []}
+    import time as _time
+
+    _t0 = _time.perf_counter()
     for m in measurements:
         for method in ["PSD", "AV", "HV"]:
             force = m.get_forces(method)
@@ -146,20 +175,20 @@ def get_all_forces_v_magpos(state_manager):
             fullforces[method].append(force)
         magpos = m.mag_pos * np.ones(force.shape[0])
         fullmagpos = np.hstack((fullmagpos, magpos))
-
+    print(f"[TIMER] force loop: {_time.perf_counter() - _t0:.3f}s", flush=True)
     extmagpos = state_manager.get_state("ext_mag_pos")
     if extmagpos is not None:
         fullmagpos = np.hstack((extmagpos, fullmagpos))
 
     for method in ["PSD", "AV", "HV"]:
         fullforces[method] = np.vstack(fullforces[method])
-
+        
     extforces = state_manager.get_state("ext_forces")
     if extforces is not None:
         for method in ["PSD", "AV", "HV"]:
             fullforces[method] = np.vstack((extforces[method], fullforces[method]))
 
-    return fullmagpos, fullforces
+    return fullmagpos, fullforces, measurements
 
 
 def export_calibration(method, path, state_manager):

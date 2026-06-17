@@ -110,13 +110,13 @@ def get_smooth_mean_trace(traces):
 def get_smooth_trace(trace):
     smooth_trace = trace.copy()
     fit = SimpleExpSmoothing(trace[:, 0], initialization_method="estimated").fit()
-    if not fit.mle_retvals.success:
+    if fit.mle_retvals.success:
         smooth_trace[:, 0] = fit.fittedvalues
     fit = SimpleExpSmoothing(trace[:, 1], initialization_method="estimated").fit()
-    if not fit.mle_retvals.success:
+    if fit.mle_retvals.success:
         smooth_trace[:, 1] = fit.fittedvalues
     fit = SimpleExpSmoothing(trace[:, 2], initialization_method="estimated").fit()
-    if not fit.mle_retvals.success:
+    if fit.mle_retvals.success:
         smooth_trace[:, 2] = fit.fittedvalues
     smooth_trace[:, 0] -= np.mean(smooth_trace[:, 0])
     smooth_trace[:, 1] -= np.mean(smooth_trace[:, 1])
@@ -189,6 +189,8 @@ def get_noise_profile(traces, fsample):
         eps[3] += res["h1"]
         eps[4] += res["h2"]
 
+    if len(fitres) == 0:
+        return eps  # return zeros if no fits passed the support threshold
     eps = eps / len(fitres)
 
     return eps

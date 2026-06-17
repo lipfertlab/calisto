@@ -156,6 +156,16 @@ def prepare_dataframe(state_manager):
         if key not in keys_not_to_delete:
             state_manager.delete_state(key)
 
+def isbeadkey(k):
+    start = 0
+    if k[start] == "M" or k[start] == "R":
+        start = 1
+
+    try:
+        int(k[start:])
+        return True
+    except ValueError:
+        return False
 
 def load_hdf_datafile(path, state_manager):
     f = h5py.File(path, "r")
@@ -169,13 +179,18 @@ def load_hdf_datafile(path, state_manager):
     mag_pos = f["stage"]["mag_pos_mm"]
     mag_pos = process_motor_data_position_units(mag_pos, state_manager)
 
-    nbeads = len(f.keys()) - 3
+    nbeads = 0
+    for k in f.keys():
+        if isbeadkey(k):
+            nbeads += 1
+
     bead_type = np.empty(nbeads, dtype=BeadType)
 
     bead_data = np.empty((time.shape[0], nbeads, 3), dtype=np.float64)
 
     for k in f.keys():
-        print(k[0])
+        if not isbeadkey(k):
+            continue
         if k[0] == "M" or k[0] == "R":
             type = BeadType.MAGNETIC if k[0] == "M" else BeadType.REFERENCE
             beadid = int(k[1:])

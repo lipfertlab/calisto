@@ -8,7 +8,7 @@ import numpy as np
 import scipy
 
 try:
-    from numba import njit
+    from numba import njit, prange
 except ImportError:  # pragma: no cover - numba is optional
 
     def njit(*args, **kwargs):
@@ -17,8 +17,12 @@ except ImportError:  # pragma: no cover - numba is optional
 
         return decorator
 
+    prange = range
+
 
 from warnings import warn
+
+prange = range
 
 
 def m_generator(N, taus="octave"):
@@ -61,7 +65,7 @@ def m_generator(N, taus="octave"):
     return m
 
 
-@njit(cache=True)
+@njit(cache=True, fastmath=True)
 def calc_avar(phase, rate, mj, step):
     tau0 = 1.0 / rate
     mj_i = int(mj)
@@ -103,10 +107,11 @@ def calc_avar(phase, rate, mj, step):
     return (s / (2.0 * n)) / (tau_factor * tau_factor)
 
 
-@njit(cache=True)
+# @njit(cache=True, parallel=True, fastmath=True)
+@njit(cache=True, fastmath=True)
 def calc_avar_batch(phase, rate, m_values, step_values):
     out = np.empty(m_values.shape[0], dtype=np.float64)
-    for idx in range(m_values.shape[0]):
+    for idx in prange(m_values.shape[0]):
         out[idx] = calc_avar(phase, rate, m_values[idx], step_values[idx])
     return out
 
@@ -165,16 +170,16 @@ def avar(data, rate=1.0, taus="octave", overlapping=True, edf="approx"):
                 if (alpha_int < 3) and (alpha_int > -3):
                     edfs[i] = edf_greenhall(alpha_int, 2, mj, N)
                 else:
-                    warn(
-                        "Real edf failed to identify noise for %s. Falling back to approximate edf."
-                        % mj
-                    )
+                    # warn(
+                    #     "Real edf failed to identify noise for %s. Falling back to approximate edf."
+                    #     % mj
+                    # )
                     edfs[i] = edf_approx(N, mj)
             else:
-                warn(
-                    "Real edf failed to identify noise for %s. Falling back to approximate edf."
-                    % mj
-                )
+                # warn(
+                #     "Real edf failed to identify noise for %s. Falling back to approximate edf."
+                #     % mj
+                # )
                 edfs[i] = edf_approx(N, mj)
     elif edf == "approx":
         edfs = edf_approx(N, m)
@@ -274,11 +279,14 @@ def totvar(data, rate=1.0, taus="octave", edf="approx"):
         for idx, mj in enumerate(m):
             if N // mj >= 32:
                 alpha_int = noise_id(data, mj)[0]
-            tvars[idx] /= 1 - totvar_bias(alpha_int) * (mj / N)
-            if (alpha_int <= 0) and (alpha_int >= -2):
-                edfs[idx] = edf_totdev(N, mj, alpha_int)
+                tvars[idx] /= 1 - totvar_bias(alpha_int) * (mj / N)
+                if (alpha_int <= 0) and (alpha_int >= -2):
+                    edfs[idx] = edf_totdev(N, mj, alpha_int)
+                else:
+                    warn("Real edf failed for %s." % mj)
+                    edfs[idx] = edf_approx(N, mj)
             else:
-                warn("Real edf failed for %s." % mj)
+                warn("Real edf failed for %s. Falling back to approximate edf." % mj)
                 edfs[idx] = edf_approx(N, mj)
     return taus, edfs, tvars
 

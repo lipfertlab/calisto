@@ -11,10 +11,14 @@ from PySide6.QtWidgets import (
     QFileDialog,
     QMessageBox,
     QLineEdit,
+    QApplication,
 )
+from PySide6.QtCore import Qt
 
 import pyqtgraph as pyg
 import numpy as np
+
+# import time
 
 
 pyg.setConfigOption("background", "w")
@@ -32,6 +36,7 @@ from engines.engine import BeadType
 
 import engines.calibration_engine as engine
 import engines.fit_engine as fit
+from gui.worker import WorkerManager
 
 checkmark = "\u2713"
 crossmark = "\u2717"
@@ -45,7 +50,9 @@ class MasterCurvePlotterWindow(QWidget):
         if parent is not None:
             self.state_manager.stateChanged.connect(parent.on_state_changed)
 
-        self.measurements = engine.prepare_multibeadmeasurement(state_manager)
+        # Initialize worker manager
+        self.worker_manager = WorkerManager(self)
+        self.measurements = None
 
         self.layout = QHBoxLayout()
         self.setLayout(self.layout)
@@ -58,7 +65,58 @@ class MasterCurvePlotterWindow(QWidget):
         # self.zrange = self.plotter.getAxis("left").range
         self.force_ub = None
         self.fitparemeters = {}
+        self.fullmagpos = None
+        self.fullforces = None
+
+        self.expfitres = None
+        self.dexpfitres = None
+
+        # # Prepare measurements asynchronously
+        # QApplication.setOverrideCursor(Qt.WaitCursor)
+        # self.worker_manager.run_async(
+        #     engine.prepare_multibeadmeasurement,
+        #     state_manager,
+        #     on_result=self._measurements_ready,
+        #     on_error=self._handle_measurement_error,
+        # )
+        self.measurements = engine.prepare_multibeadmeasurement(self.state_manager)
+        self.extmagpos = self.state_manager.get_state("ext_mag_pos")
+        self.extforces = self.state_manager.get_state("ext_forces")
+        # Run prepare_multibeadmeasurement on the GUI thread (it calls set_state),
+        # then offload the expensive force computation to a worker thread.
+        QApplication.setOverrideCursor(Qt.WaitCursor)
+        try:
+            measurements = engine.prepare_multibeadmeasurement(state_manager)
+        except Exception as e:
+            QApplication.restoreOverrideCursor()
+            QMessageBox.critical(self, "Error", f"Error preparing measurements: {e}")
+            return
+        self._launch_force_computation(measurements)
+
+    def _launch_force_computation(self, measurements):
+        """Offload force computation to a worker thread."""
+        self.worker_manager.run_async(
+            engine.compute_forces_from_measurements,
+            measurements,
+            self.state_manager,
+            on_result=self._forces_ready,
+            on_error=self._handle_measurement_error,
+        )
+
+    def _forces_ready(self, result):
+        """Called when force computation is done (runs in GUI thread)."""
+        self.fullmagpos, self.fullforces, self.measurements = result
+        print("Forces ready, plotting curves...")
         self.plot_curves()
+        QApplication.restoreOverrideCursor()
+
+    def _handle_measurement_error(self, error_msg, traceback):
+        """Handle errors during measurement preparation."""
+        QApplication.restoreOverrideCursor()
+        QMessageBox.critical(
+            self, "Error", f"Error preparing measurements: {error_msg}"
+        )
+        print(traceback)
 
     def create_fcplotter(self):
         plotter = pyg.PlotWidget()
@@ -198,8 +256,13 @@ class MasterCurvePlotterWindow(QWidget):
         return np.array(magbeads)
 
     def plot_curves(self):
+        # Guard: Don't plot if forces aren't computed yet
+        if self.fullmagpos is None or self.fullforces is None:
+            return
+
+        fullmagpos = self.fullmagpos
+        fullforces = self.fullforces
         colors = {"PSD": "g", "AV": "r", "HV": "b"}
-        fullmagpos, fullforces = engine.get_all_forces_v_magpos(self.state_manager)
 
         self.fcplotter.clear()
         for idx, method in enumerate(["PSD", "AV", "HV"]):
@@ -232,9 +295,15 @@ class MasterCurvePlotterWindow(QWidget):
                     self.state_manager.get_state("master_curve_model")
                     == "Double Exponential"
                 ):
-                    dexpfit = fit.fit_double_exp_multiplicative(
-                        fullmagpos[mask], fullforces[method][mask, 0]
-                    )
+                    if self.dexpfitres is not None and method in self.dexpfitres:
+                        dexpfit = self.dexpfitres[method]
+                    else:
+                        dexpfit = fit.fit_double_exp_multiplicative(
+                            fullmagpos[mask], fullforces[method][mask, 0]
+                        )
+                        self.dexpfitres = self.dexpfitres or {}
+                        self.dexpfitres[method] = dexpfit
+
                     fmax = dexpfit["Fmax"]
                     l1 = dexpfit["tau_fast"]
                     l2 = dexpfit["tau_slow"]
@@ -267,9 +336,15 @@ class MasterCurvePlotterWindow(QWidget):
                     self.state_manager.get_state("master_curve_model")
                     == "Single Exponential"
                 ):
-                    sexpfit = fit.fit_single_exp_multiplicative(
-                        fullmagpos[mask], fullforces[method][mask, 0]
-                    )
+                    if self.expfitres is not None and method in self.expfitres:
+                        sexpfit = self.expfitres[method]
+                    else:
+                        sexpfit = fit.fit_single_exp_multiplicative(
+                            fullmagpos[mask], fullforces[method][mask, 0]
+                        )
+                        self.expfitres = self.expfitres or {}
+                        self.expfitres[method] = sexpfit
+
                     fmax = sexpfit["A"]
                     l1 = sexpfit["tau"]
 
@@ -301,7 +376,8 @@ class MasterCurvePlotterWindow(QWidget):
                     name=f"{method} fit",
                 )
 
-            except:
+            except Exception as e:
+                print(f"Error fitting master curve for {method}: {e}")
                 self.fitparemeterslabel[method][0].setText("N/A")
                 self.fitparemeterslabel[method][2].setText("N/A")
                 self.fitparemeterslabel[method][1].setText("N/A")
@@ -345,7 +421,10 @@ class MasterCurvePlotterWindow(QWidget):
         try:
             for p in path:
                 engine.load_force_calibration_data(p, self.state_manager)
-            self.plot_curves()
+            # Recompute forces in worker thread, plot_curves runs on completion
+            QApplication.setOverrideCursor(Qt.WaitCursor)
+            measurements = engine.prepare_multibeadmeasurement(self.state_manager)
+            self._launch_force_computation(measurements)
         except Exception as e:
             QMessageBox.critical(self, "Error", str(e))
 
@@ -365,6 +444,7 @@ class MasterCurvePlotterWindow(QWidget):
         """
         Override the closeEvent to handle window closing.
         """
+        self.worker_manager.cleanup()
         engine.clear_external_force_calibration_data(self.state_manager)
         event.accept()
 
@@ -379,4 +459,6 @@ class MasterCurvePlotterWindow(QWidget):
             )
             return
         self.force_ub = ub
+        self.dexpfitres = None
+        self.expfitres = None
         self.plot_curves()

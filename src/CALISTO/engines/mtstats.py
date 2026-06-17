@@ -31,6 +31,12 @@ def skewnorm_mle_fit(data):
         print(f"Error fitting skewnorm: {e}")
         success = False
 
+    if not success:
+        # Fallback to Gaussian if skewnorm fit fails
+        loc = np.mean(data[np.isfinite(data)])
+        scale = np.std(data[np.isfinite(data)])
+        shape = 0.0
+
     res = {
         "shape": shape,
         "shape_error": 0.0,

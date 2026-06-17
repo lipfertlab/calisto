@@ -12,6 +12,7 @@ from PySide6.QtWidgets import (
     QGroupBox,
     QMessageBox,
     QFileDialog,
+    QApplication,
 )
 from PySide6.QtCore import Qt, Signal, QObject
 import pyqtgraph as pyg
@@ -30,6 +31,7 @@ sys.path.append(str(Path(__file__).resolve().parent.parent))
 from engines.engine import BeadType
 
 import engines.offset_engine as engine
+from gui.worker import WorkerManager
 
 checkmark = "\u2713"
 crossmark = "\u2717"
@@ -43,7 +45,8 @@ class OffsetPlotterWindow(QWidget):
         if parent is not None:
             self.state_manager.stateChanged.connect(parent.on_state_changed)
 
-        engine.process_raw_data(self.state_manager)
+        # Initialize worker manager
+        self.worker_manager = WorkerManager(self)
 
         self.layout = QHBoxLayout()
         self.setLayout(self.layout)
@@ -67,6 +70,24 @@ class OffsetPlotterWindow(QWidget):
 
         self.control_group = self.create_controls()
         self.layout.addWidget(self.control_group)
+        
+        # Process raw data asynchronously
+        QApplication.setOverrideCursor(Qt.WaitCursor)
+        self.worker_manager.run_async(
+            engine.process_raw_data,
+            self.state_manager,
+            on_result=self._on_results_ready,
+            on_error=self._handle_processing_error
+        )
+    
+    def _handle_processing_error(self, error_msg, traceback):
+        """Handle errors during data processing."""
+        QApplication.restoreOverrideCursor()
+        QMessageBox.critical(self, "Error", f"Error processing raw data: {error_msg}")
+
+    def _on_results_ready(self, result):
+        QApplication.restoreOverrideCursor()
+        self.bead_id_changed()
 
     def closeEvent(self, event):
         # pop up a message box to ask if the user wants to save the current offsets
@@ -150,7 +171,7 @@ class OffsetPlotterWindow(QWidget):
         control_layout.addWidget(self.next_button, 3, 1)
         self.next_button.clicked.connect(self.next_bead)
 
-        self.bead_id_changed()
+        # self.bead_id_changed()
 
         return control_group
 
@@ -199,6 +220,8 @@ class OffsetPlotterWindow(QWidget):
 
         zmin = self.zrange[0]
         zmax = self.zrange[1]
+        if zmax == zmin:
+            return zmin
         dz = (zmax - zmin) / self.offset_slider_step_count
         offset = zmin + offset_int * dz
 
@@ -207,6 +230,9 @@ class OffsetPlotterWindow(QWidget):
     def set_slider_value(self, offset):
         zmin = self.zrange[0]
         zmax = self.zrange[1]
+        if zmax == zmin:
+            self.offset_slider.setValue(0)
+            return
         dz = (zmax - zmin) / self.offset_slider_step_count
         offset_int = int((offset - zmin) / dz)
         self.offset_slider.setValue(offset_int)
@@ -226,7 +252,10 @@ class OffsetPlotterWindow(QWidget):
             )
             self.manualline.setZValue(10)
         else:
-            offset = float(self.offset_input.text())
+            try:
+                offset = float(self.offset_input.text())
+            except ValueError:
+                return
             beadid = int(self.bead_combo.currentText())
 
             bead_specs = self.state_manager.get_state("bead_specs")
@@ -244,7 +273,10 @@ class OffsetPlotterWindow(QWidget):
     def slider_release(self):
         self.slider_interaction = False
 
-        offset = float(self.offset_input.text())
+        try:
+            offset = float(self.offset_input.text())
+        except ValueError:
+            return
         beadid = int(self.bead_combo.currentText())
 
         bead_specs = self.state_manager.get_state("bead_specs")
