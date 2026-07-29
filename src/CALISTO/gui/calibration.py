@@ -66,7 +66,7 @@ class CalibrationPlotterWindow(QWidget):
 
     def create_fcplotter(self):
         plotter = pyg.PlotWidget()
-        plotter.setLabel("bottom", "Magnet Position (nm)")
+        plotter.setLabel("bottom", "Magnet Position (mm)")
         plotter.setLabel("left", "Force (pN)")
         plotter.showGrid(x=True, y=True)
         plotter.setMouseEnabled(x=True, y=True)
