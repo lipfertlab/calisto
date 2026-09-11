@@ -198,7 +198,7 @@ def export_calibration(method, path, state_manager):
     fitparams = fitparams[method]
     fitmodel = state_manager.get_state("master_curve_model", None)
 
-    fullmagpos, fullforces = get_all_forces_v_magpos(state_manager)
+    fullmagpos, fullforces, _ = get_all_forces_v_magpos(state_manager)
     data = {
         "mag_pos": fullmagpos,
         "forces": fullforces,

@@ -35,9 +35,12 @@ def smoothed_trace_lag_1(traces, axis, verbose=False):
         fit = SimpleExpSmoothing(dtrc, initialization_method="estimated").fit()
         tau = -1 / np.log(1 - fit.params["smoothing_level"])
         if not fit.mle_retvals.success or 20 * tau > len(dtrc):
+            tau = 30
+            smt_lvl = 1 - np.exp(-1 / tau)
             fit = SimpleExpSmoothing(dtrc, initialization_method="heuristic").fit(
-                smoothing_level=alphamin, optimized=False
+                smoothing_level=smt_lvl, optimized=False
             )
+
         smooth_dtrc.append(fit.fittedvalues)
         tau = -1 / np.log(1 - fit.params["smoothing_level"])
         if tau > taumax:
