@@ -424,6 +424,8 @@ class MasterCurvePlotterWindow(QWidget):
             # Recompute forces in worker thread, plot_curves runs on completion
             QApplication.setOverrideCursor(Qt.WaitCursor)
             measurements = engine.prepare_multibeadmeasurement(self.state_manager)
+            self.dexpfitres = None
+            self.expfitres = None
             self._launch_force_computation(measurements)
         except Exception as e:
             QMessageBox.critical(self, "Error", str(e))
