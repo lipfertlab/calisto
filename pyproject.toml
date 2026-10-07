@@ -28,7 +28,7 @@ authors = [{ name = "Alptug Ulugol" }, { name = "Stefanie Pritzl" }]
 description = "A Gui Application for the MT Force Calibration"
 readme = "README.md"
 license = { file = "LICENSE" }
-requires-python = "==3.12"
+requires-python = ">=3.12,<3.13"
 classifiers = [
     "Programming Language :: Python :: 3",
     "Operating System :: OS Independent",

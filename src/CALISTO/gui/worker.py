@@ -7,7 +7,7 @@ This module provides Worker classes and utilities to execute long-running
 computations asynchronously, preventing the GUI from freezing.
 """
 
-from PySide6.QtCore import QObject, QThread, Signal, Slot
+from PySide6.QtCore import QObject, QThread, Signal, Slot, Qt
 import traceback
 from typing import Callable, Any, Optional
 
@@ -82,7 +82,7 @@ class ProgressWorker(Worker):
         self.progress.emit(percentage, message)
 
 
-class WorkerManager:
+class WorkerManager(QObject):
     """
     Manages worker threads and provides convenience methods.
     
@@ -97,6 +97,7 @@ class WorkerManager:
         Args:
             parent_widget: The parent QWidget (usually the GUI window)
         """
+        super().__init__(parent_widget)
         self.parent_widget = parent_widget
         self.active_threads = []
         self.active_workers = []
@@ -148,20 +149,24 @@ class WorkerManager:
         # Create worker and thread
         WorkerClass = ProgressWorker if use_progress else Worker
         worker = WorkerClass(func, *args, **kwargs)
+        worker.callbacks = {
+            "result": on_result, "error": on_error,
+            "finished": on_finished, "progress": on_progress,
+        }
         thread = QThread(self.parent_widget)  # Set parent to keep thread alive
         
         # Move worker to thread
         worker.moveToThread(thread)
         
-        # Connect signals
+        # Route callbacks through this GUI-thread QObject, including lambdas.
         if on_result:
-            worker.result.connect(on_result)
+            worker.result.connect(self._on_result, Qt.QueuedConnection)
         if on_error:
-            worker.error.connect(on_error)
+            worker.error.connect(self._on_error, Qt.QueuedConnection)
         if on_finished:
-            worker.finished.connect(on_finished)
+            worker.finished.connect(self._on_finished, Qt.QueuedConnection)
         if on_progress and use_progress:
-            worker.progress.connect(on_progress)
+            worker.progress.connect(self._on_progress, Qt.QueuedConnection)
         
         # Connect thread start to worker run
         thread.started.connect(worker.run)
@@ -184,6 +189,22 @@ class WorkerManager:
         thread.start()
         
         return thread, worker
+
+    @Slot(object)
+    def _on_result(self, result):
+        self.sender().callbacks["result"](result)
+
+    @Slot(str, str)
+    def _on_error(self, message, traceback):
+        self.sender().callbacks["error"](message, traceback)
+
+    @Slot()
+    def _on_finished(self):
+        self.sender().callbacks["finished"]()
+
+    @Slot(int, str)
+    def _on_progress(self, percentage, message):
+        self.sender().callbacks["progress"](percentage, message)
     
     def _cleanup_thread(self, thread: QThread, worker: Worker):
         """Remove finished threads and workers from tracking."""

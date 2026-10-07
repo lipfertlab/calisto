@@ -13,52 +13,34 @@ import autograd.numpy as np
 
 
 def _small_matrix_inv(M):
-    """Invert a small matrix using pure Python (no LAPACK).
+    """Invert 1–3 parameter Hessians without LAPACK.
 
-    On macOS the Accelerate BLAS/LAPACK backend uses Grand Central Dispatch
-    which deadlocks when called from a QThread while the Qt event loop owns
-    the main dispatch queue.  For the 2×2 and 3×3 matrices produced by our
-    MLE fits we can compute the inverse with simple closed-form formulae,
-    avoiding LAPACK entirely.
+    Avoid macOS Accelerate/GCD deadlocks in QThread. Row scaling and
+    partial pivoting keep elimination stable across parameter units.
     """
+    M = _real_np.asarray(M, dtype=float)
+    if M.ndim != 2 or M.shape[0] != M.shape[1] or not 1 <= M.shape[0] <= 3:
+        raise ValueError("Expected a square 1×1, 2×2, or 3×3 matrix.")
+    if not _real_np.isfinite(M).all():
+        raise _real_np.linalg.LinAlgError("Non-finite Hessian.")
     n = M.shape[0]
-    if n == 1:
-        return _real_np.array([[1.0 / M[0, 0]]])
-    if n == 2:
-        a, b = M[0, 0], M[0, 1]
-        c, d = M[1, 0], M[1, 1]
-        det = float(a * d - b * c)
-        return _real_np.array([[d, -b], [-c, a]]) / det
-
-    raise ValueError("Matrix inversion only implemented for 1×1 and 2×2 matrices.")
-    # if n == 3:
-    #     a = M
-    #     det = float(
-    #         a[0,0]*(a[1,1]*a[2,2] - a[1,2]*a[2,1])
-    #       - a[0,1]*(a[1,0]*a[2,2] - a[1,2]*a[2,0])
-    #       + a[0,2]*(a[1,0]*a[2,1] - a[1,1]*a[2,0])
-    #     )
-    #     inv = _real_np.empty((3, 3))
-    #     inv[0,0] = a[1,1]*a[2,2] - a[1,2]*a[2,1]
-    #     inv[0,1] = a[0,2]*a[2,1] - a[0,1]*a[2,2]
-    #     inv[0,2] = a[0,1]*a[1,2] - a[0,2]*a[1,1]
-    #     inv[1,0] = a[1,2]*a[2,0] - a[1,0]*a[2,2]
-    #     inv[1,1] = a[0,0]*a[2,2] - a[0,2]*a[2,0]
-    #     inv[1,2] = a[0,2]*a[1,0] - a[0,0]*a[1,2]
-    #     inv[2,0] = a[1,0]*a[2,1] - a[1,1]*a[2,0]
-    #     inv[2,1] = a[0,1]*a[2,0] - a[0,0]*a[2,1]
-    #     inv[2,2] = a[0,0]*a[1,1] - a[0,1]*a[1,0]
-    #     return inv / det
-    # # Fallback for larger matrices — use Gauss-Jordan (pure Python, no LAPACK)
-    # A = _real_np.hstack([M.astype(float), _real_np.eye(n)])
-    # for col in range(n):
-    #     pivot = _real_np.argmax(_real_np.abs(A[col:, col])) + col
-    #     A[[col, pivot]] = A[[pivot, col]]
-    #     A[col] = A[col] / A[col, col]
-    #     for row in range(n):
-    #         if row != col:
-    #             A[row] -= A[row, col] * A[col]
-    # return A[:, n:]
+    scale = _real_np.max(_real_np.abs(M), axis=1)
+    if _real_np.any(scale == 0):
+        raise _real_np.linalg.LinAlgError("Singular Hessian.")
+    A = _real_np.column_stack((M, _real_np.eye(n))) / scale[:, None]
+    for col in range(n):
+        pivot = col + _real_np.argmax(_real_np.abs(A[col:, col]))
+        if A[pivot, col] == 0:
+            raise _real_np.linalg.LinAlgError("Singular Hessian.")
+        A[[col, pivot]] = A[[pivot, col]]
+        A[col] /= A[col, col]
+        for row in range(n):
+            if row != col:
+                A[row] -= A[row, col] * A[col]
+    inverse = A[:, n:]
+    if not _real_np.isfinite(inverse).all():
+        raise _real_np.linalg.LinAlgError("Non-finite inverse Hessian.")
+    return inverse
 
 
 class MCMC:

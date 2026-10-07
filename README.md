@@ -26,7 +26,7 @@
 
 ## Requirements
 
-- **Python 3.12** (exact version required)
+- **Python 3.12.x**
 - All dependencies are declared in `pyproject.toml` and installed automatically.
 
 ### Key dependencies

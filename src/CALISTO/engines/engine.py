@@ -160,14 +160,14 @@ def process_motor_data_time_units(magtime, state_manager):
     return magtime * const
 
 
-def process_bead_data_position_units(pos, state_manager):
+def process_bead_data_position_units(pos, state_manager, *, copy=True):
     constxy = state_manager.get_state("config")[
         state_manager.get_state("config_setup")
     ]["bead_xy_position_to_nanometers"]
     constz = state_manager.get_state("config")[state_manager.get_state("config_setup")][
         "bead_z_position_to_nanometers"
     ]
-    rpos = pos.copy()
+    rpos = pos.copy() if copy else pos
     rpos[:, :, 0] *= constxy
     rpos[:, :, 1] *= constxy
     rpos[:, :, 2] *= constz
@@ -192,10 +192,12 @@ class SingleBeadMeasurement:
         refbead=False,
         ref_subtracted=False,
         offset_subtracted=False,
+        kT=4.1,
     ):
         self.fs = float(fs)
         self.ax = int(ax)
         self.radius = float(radius)
+        self.kT = float(kT)
         self.trace = trace
         self.refbead = bool(refbead)
         self.ref_subtracted = bool(ref_subtracted)
@@ -214,6 +216,7 @@ class SingleBeadMeasurement:
 
         self._extension = None
         self._EoMparams = {}
+        self._eom_options = None
         self._force = {}
 
     def subtract_reference(self, reftrace):
@@ -231,6 +234,8 @@ class SingleBeadMeasurement:
         return self
 
     def outdate(self):
+        self._EoMparams.clear()
+        self._force.clear()
         for k in self.outdated:
             self.outdated[k] = True
 
@@ -271,7 +276,7 @@ class SingleBeadMeasurement:
 
         return self._extension
 
-    def get_EoM_parameters(self, method, correct_tracking_error=False, kT=4.1):
+    def get_EoM_parameters(self, method, correct_tracking_error=False, kT=None):
         """Calculates the parameters kappa and gamma of the Langevin
         EoM given by
 
@@ -301,22 +306,21 @@ class SingleBeadMeasurement:
                 "Reference trace is not subtracted. Mechanical drift might alter the results."
             )
 
-        for v in self._EoMparams.values():
-            if ("e" in v) != correct_tracking_error:
-                self.outdated["eom"] = True
-                break
-
-        if self.outdated["eom"]:
-            self._EoMparams = {}
+        kT = self.kT if kT is None else float(kT)
+        options = (kT, correct_tracking_error)
+        if self.outdated["eom"] or self._eom_options != options:
+            self._EoMparams.clear()
+            self._force.clear()
+        self._eom_options = options
 
         if method not in self._EoMparams.keys():
 
             if method == "fusion":
                 self.outdated["eom"] = False
 
-                _, _, psdres = self.get_EoM_parameters("PSD", correct_tracking_error)
-                _, _, avres = self.get_EoM_parameters("AV", correct_tracking_error)
-                _, _, hvres = self.get_EoM_parameters("HV", correct_tracking_error)
+                _, _, psdres = self.get_EoM_parameters("PSD", correct_tracking_error, kT=kT)
+                _, _, avres = self.get_EoM_parameters("AV", correct_tracking_error, kT=kT)
+                _, _, hvres = self.get_EoM_parameters("HV", correct_tracking_error, kT=kT)
 
                 ress = [psdres, avres, hvres]
 
@@ -344,8 +348,8 @@ class SingleBeadMeasurement:
                 self._EoMparams[method] = res
             elif method == "auto":
                 self.outdated["eom"] = False
-                _, _, autores = self.get_EoM_parameters("AV", correct_tracking_error)
-                _, _, hvres = self.get_EoM_parameters("HV", correct_tracking_error)
+                _, _, autores = self.get_EoM_parameters("AV", correct_tracking_error, kT=kT)
+                _, _, hvres = self.get_EoM_parameters("HV", correct_tracking_error, kT=kT)
 
                 if hvres["AICc"] < autores["AICc"]:
                     autores = hvres
@@ -391,8 +395,8 @@ class SingleBeadMeasurement:
         assert type(method) == str
         assert method in ["PSD", "AV", "HV", "auto", "naive", "fusion"]
 
+        kappa, _, _ = self.get_EoM_parameters(method, correct_tracking_error)
         if method not in self._force.keys() or self.outdated["force"]:
-            kappa, _, _ = self.get_EoM_parameters(method, correct_tracking_error)
             zpos = self.get_extension()
             self._force[method] = np.array([0.0, 0.0])
 
@@ -407,9 +411,10 @@ class SingleBeadMeasurement:
 
         return self._force[method]
 
-    def get_power_ratio(self, method, correct_tracking_error=False, kT=4.1):
+    def get_power_ratio(self, method, correct_tracking_error=False, kT=None):
+        kT = self.kT if kT is None else float(kT)
         k, g, _ = self.get_EoM_parameters(
-            method, correct_tracking_error=correct_tracking_error
+            method, correct_tracking_error=correct_tracking_error, kT=kT
         )
         if g[0] == 0 or k[0] == 0:
             return np.nan
@@ -478,6 +483,7 @@ class MultiBeadMeasurement(MutableMapping):
         bead_ids=None,
         refbead_ids=None,
         bead_radius=500.0,
+        kT=4.1,
     ):
 
         self.fs = float(fs)
@@ -485,6 +491,7 @@ class MultiBeadMeasurement(MutableMapping):
         self.mag_rot = float(mag_rot)
         self.ax = int(ax)
         self.radius = float(bead_radius)
+        self.kT = float(kT)
 
         assert type(traces) == np.ndarray
         assert len(traces.shape) == 3
@@ -506,7 +513,7 @@ class MultiBeadMeasurement(MutableMapping):
         self.bead = {}
 
         for id, trace in zip(self.bead_ids, self.traces):
-            self.bead[id] = SingleBeadMeasurement(self.fs, self.ax, trace, self.radius)
+            self.bead[id] = SingleBeadMeasurement(self.fs, self.ax, trace, self.radius, kT=self.kT)
 
         self.ref_subtracted = False
         self.refbead_ids = refbead_ids
@@ -540,6 +547,7 @@ class MultiBeadMeasurement(MutableMapping):
         clone.mag_rot = self.mag_rot
         clone.ax = self.ax
         clone.radius = self.radius
+        clone.kT = self.kT
         clone.nbeads = self.nbeads
         clone.bead_ids = self.bead_ids
         clone.refbead_ids = self.refbead_ids
@@ -557,6 +565,7 @@ class MultiBeadMeasurement(MutableMapping):
             s.fs = sbm.fs
             s.ax = sbm.ax
             s.radius = sbm.radius
+            s.kT = sbm.kT
             s.trace = sbm.trace              # shared (read-only)
             s.refbead = sbm.refbead
             s.good = sbm.good
@@ -565,6 +574,7 @@ class MultiBeadMeasurement(MutableMapping):
             s.outdated = {"eom": False, "ext": False, "force": False}
             s._extension = None
             s._EoMparams = {}
+            s._eom_options = None
             s._force = {}
             clone.bead[bid] = s
 
@@ -617,7 +627,7 @@ class MultiBeadMeasurement(MutableMapping):
         return self.extension
 
     def get_power_ratios(
-        self, method, correct_tracking_error=False, onlygoodbeads=True, kT=4.1
+        self, method, correct_tracking_error=False, onlygoodbeads=True, kT=None
     ):
         prs = []
         for bead in self.bead.values():

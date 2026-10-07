@@ -16,6 +16,7 @@ from .engine import (
     process_motor_data_position_units,
 )
 import pandas as pd
+from .landing_engine import read_hdf_beads
 
 
 class OffsetType(Enum):
@@ -201,7 +202,9 @@ def offset_data_load(offset_data_path, file_type, status_manager):
             "Number of bead in the offset data and the data set do not match."
         )
 
-    data = process_bead_data_position_units(data, status_manager)
+    data = process_bead_data_position_units(
+        data, status_manager, copy=file_type != FileType.HDF5
+    )
     time = process_bead_data_time_units(time, status_manager)
 
     status_manager.set_state("offset_rawdata", data)
@@ -209,27 +212,8 @@ def offset_data_load(offset_data_path, file_type, status_manager):
 
 
 def offset_data_hdf_load(path):
-    f = h5py.File(path, "r")
-
-    time = np.array(f["timestamp"]).astype(np.float64)
-
-    nbeads = len(f.keys()) - 3
-    bead_type = np.empty(nbeads, dtype=BeadType)
-    bead_data = np.empty((time.shape[0], nbeads, 3), dtype=np.float64)
-
-    for k in f.keys():
-        print(k[0])
-        if not (k[0] == "M" or k[0] == "R"):
-            continue
-        type = BeadType.MAGNETIC if k[0] == "M" else BeadType.REFERENCE
-        beadid = int(k[1:])
-        bead_type[beadid] = type
-        bead = f[k]
-        bead_data[:, beadid, 0] = bead["x_nm"]
-        bead_data[:, beadid, 1] = bead["y_nm"]
-        bead_data[:, beadid, 2] = bead["z_nm"]
-    f.close()
-
+    with h5py.File(path, "r") as f:
+        time, bead_data, _ = read_hdf_beads(f)
     return time, bead_data
 
 
@@ -255,35 +239,18 @@ def prepare_mean_reference(status_manager):
 
 
 def load_rot_hdfdatafile(path, state_manager):
-    f = h5py.File(path, "r")
+    with h5py.File(path, "r") as f:
+        time, bead_data, _ = read_hdf_beads(f)
+        mag_time = np.asarray(f["stage"]["t_s"])
+        mag_pos = np.asarray(f["stage"]["mag_pos_mm"])
+        mag_rot = np.asarray(f["stage"]["mag_rot_turn"])
 
-    time = np.array(f["timestamp"]).astype(np.float64)
     time = process_bead_data_time_units(time, state_manager)
-
-    mag_time = f["stage"]["t_s"]
     mag_time = process_motor_data_time_units(mag_time, state_manager)
-
-    mag_pos = f["stage"]["mag_pos_mm"]
     mag_pos = process_motor_data_position_units(mag_pos, state_manager)
+    nbeads = bead_data.shape[1]
 
-    mag_rot = f["stage"]["mag_rot_turn"]
-
-    nbeads = len(f.keys()) - 3
-    bead_data = np.empty((time.shape[0], nbeads, 3), dtype=np.float64)
-
-    for k in f.keys():
-        if not (k[0] == "M" or k[0] == "R"):
-            continue
-
-        beadid = int(k[1:])
-
-        bead = f[k]
-        bead_data[:, beadid, 0] = bead["x_nm"]
-        bead_data[:, beadid, 1] = bead["y_nm"]
-        bead_data[:, beadid, 2] = bead["z_nm"]
-    f.close()
-
-    bead_data = process_bead_data_position_units(bead_data, state_manager)
+    bead_data = process_bead_data_position_units(bead_data, state_manager, copy=False)
 
     state_manager.set_state("rot_time", time)
     state_manager.set_state("rot_bead_pos", bead_data)

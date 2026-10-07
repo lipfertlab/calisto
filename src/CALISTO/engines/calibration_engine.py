@@ -71,6 +71,7 @@ def prepare_multibeadmeasurement(state_manager):
             allBeads,  # all beads (references are included)
             refbeads,  # reference bead ids
             bead_radius=bead_radius,
+            kT=1.3806503e-2 * state_manager.get_state("temperature"),
         )
         for bid in allBeads:
             m[bid].good = include[bid, pid]
@@ -193,8 +194,8 @@ def compute_forces_from_measurements(measurements, state_manager):
 
 def export_calibration(method, path, state_manager):
     fitparams = state_manager.get_state("master_curve_params", None)
-    if fitparams is None:
-        raise ValueError("No master curve fit available.")
+    if not fitparams or method not in fitparams:
+        raise ValueError(f"No master curve fit available for {method}.")
     fitparams = fitparams[method]
     fitmodel = state_manager.get_state("master_curve_model", None)
 
