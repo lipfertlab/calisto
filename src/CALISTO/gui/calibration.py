@@ -200,6 +200,10 @@ class CalibrationPlotterWindow(QWidget):
         # Extract ALL data from state_manager and measurements in main thread
         # (Qt objects and complex objects are not thread-safe!)
         try:
+            # Refresh dependencies before reusing results from an earlier plot.
+            if hasattr(self.state_manager, "_measurement_inputs"):
+                self.measurements = engine.prepare_multibeadmeasurement(self.state_manager)
+            self._pending_beads = []
             include = self.state_manager.get_state("inclusion").copy()
             temp = self.state_manager.get_state("temperature")
 
@@ -210,7 +214,8 @@ class CalibrationPlotterWindow(QWidget):
                     continue
 
                 # Independent result caches; force computation only reads traces.
-                measurement_data.append((m.mag_pos, m.copy()[bead_id]))
+                measurement_data.append((m.mag_pos, m[bead_id].copy()))
+                self._pending_beads.append((m, getattr(m, "revision", 0), bead_id))
         except Exception as e:
             print(f"Error preparing data: {e}")
             import traceback
@@ -330,11 +335,16 @@ class CalibrationPlotterWindow(QWidget):
             "plot_data": plot_data,
             "colors": colors,
             "has_data": True,
+            "computed_beads": [bead for _, bead in measurement_data],
         }
 
     @Slot(object)
     def _update_plots(self, result):
         """Update plots with computed data (runs in GUI thread)."""
+        # Publish independent completed caches on the GUI thread only.
+        for (measurement, revision, bid), bead in zip(self._pending_beads, result.get("computed_beads", [])):
+            if getattr(measurement, "revision", 0) == revision:
+                measurement.bead[bid] = bead.copy()
         # Clear plots first
         self.fcplotter.clear()
         self.wlcplotter.clear()

@@ -3,6 +3,7 @@
 # CALISTO — Copyright (C) 2026 Alptuğ Ulugöl and Stefanie Pritzl
 # Licensed under the GNU General Public License v3.0 — see LICENSE
 from pathlib import Path
+from copy import copy, deepcopy
 
 import sys
 
@@ -121,6 +122,9 @@ class StateManager(QObject):
             )
 
     def set_state(self, key, value):
+        if key in {"bead_pos", "plateaus", "mag_pos", "bead_filtered_z_pos",
+                   "median_filter", "median_filter_size"}:
+            self._measurement_source_revision = getattr(self, "_measurement_source_revision", 0) + 1
         self._state[key] = value
         self._state["last_modified"] = key
         self.stateChanged.emit(self._state)
@@ -218,6 +222,13 @@ class SingleBeadMeasurement:
         self._EoMparams = {}
         self._eom_options = None
         self._force = {}
+
+    def copy(self):
+        """Share read-only traces and retain independent completed result caches."""
+        clone = copy(self)
+        for name in ("outdated", "_extension", "_EoMparams", "_force"):
+            setattr(clone, name, deepcopy(getattr(self, name)))
+        return clone
 
     def subtract_reference(self, reftrace):
         if self.refbead:
@@ -366,6 +377,9 @@ class SingleBeadMeasurement:
                 self._EoMparams[method] = res
 
             else:
+                trace = self.trace[self.ax]
+                if not np.isfinite(trace).all() or np.var(trace) == 0:
+                    raise np.linalg.LinAlgError("Trace is non-finite or has no fluctuations.")
                 if method == "PSD":
                     estimator = tp.PSD
                 if method == "AV":
@@ -377,6 +391,10 @@ class SingleBeadMeasurement:
                 est.mlefit(
                     radius=self.radius, tracking_error=correct_tracking_error, kT=kT
                 )
+                if not getattr(est, "success", True):
+                    raise np.linalg.LinAlgError("Fit did not converge.")
+                if not np.isfinite([est.results[key] for key in ("k", "k_error", "g", "g_error")]).all():
+                    raise np.linalg.LinAlgError("Non-finite fit parameters or uncertainties.")
                 if method == "PSD":
                     est.results["k"] = np.abs(
                         est.results["k"]
@@ -532,6 +550,7 @@ class MultiBeadMeasurement(MutableMapping):
         self.kappa = {}
         self.force = {}
         self.gamma = {}
+        self.fit_failures = {}
 
     def copy(self):
         """Return a lightweight copy suitable for independent computation.
@@ -541,42 +560,10 @@ class MultiBeadMeasurement(MutableMapping):
         the copy can be computed on a worker thread without racing the
         original.
         """
-        clone = object.__new__(MultiBeadMeasurement)
-        clone.fs = self.fs
-        clone.mag_pos = self.mag_pos
-        clone.mag_rot = self.mag_rot
-        clone.ax = self.ax
-        clone.radius = self.radius
-        clone.kT = self.kT
-        clone.nbeads = self.nbeads
-        clone.bead_ids = self.bead_ids
-        clone.refbead_ids = self.refbead_ids
-        clone.traces = self.traces          # shared (read-only during computation)
-        clone.reference_traces = self.reference_traces
-        clone.ref_subtracted = self.ref_subtracted
-        clone.extension = {}
-        clone.kappa = {}
-        clone.force = {}
-        clone.gamma = {}
-
-        clone.bead = {}
-        for bid, sbm in self.bead.items():
-            s = object.__new__(SingleBeadMeasurement)
-            s.fs = sbm.fs
-            s.ax = sbm.ax
-            s.radius = sbm.radius
-            s.kT = sbm.kT
-            s.trace = sbm.trace              # shared (read-only)
-            s.refbead = sbm.refbead
-            s.good = sbm.good
-            s.ref_subtracted = sbm.ref_subtracted
-            s.offset_subtracted = sbm.offset_subtracted
-            s.outdated = {"eom": False, "ext": False, "force": False}
-            s._extension = None
-            s._EoMparams = {}
-            s._eom_options = None
-            s._force = {}
-            clone.bead[bid] = s
+        clone = copy(self)
+        for name in ("extension", "kappa", "force", "gamma", "fit_failures"):
+            setattr(clone, name, deepcopy(getattr(self, name)))
+        clone.bead = {bid: bead.copy() for bid, bead in self.bead.items()}
 
         return clone
 
@@ -607,7 +594,9 @@ class MultiBeadMeasurement(MutableMapping):
             self.reference_traces.append(self.bead[bid].trace)
 
     def get_extensions(self, recalculate=False, onlygoodbeads=True):
-        if not self.extension or recalculate:
+        selection = (onlygoodbeads, tuple((bid, bead.good) for bid, bead in self.bead.items()))
+        if not self.extension or recalculate or getattr(self, "_extension_selection", None) != selection:
+            self._extension_selection = selection
             exts = []
             exts_e = []
             for bead in self.bead.values():
@@ -680,10 +669,15 @@ class MultiBeadMeasurement(MutableMapping):
         kappas = []  # kappa, kappa_error
         gammas = []  # gamma, gamma_error
 
-        for bead in self.bead.values():
+        for bid, bead in self.bead.items():
             if bead.refbead or not ((not onlygoodbeads) or bead.good):
                 continue
-            kappa, gamma, _ = bead.get_EoM_parameters(method, correct_tracking_error)
+            try:
+                kappa, gamma, _ = bead.get_EoM_parameters(method, correct_tracking_error)
+                self.fit_failures.pop((method, bid), None)
+            except np.linalg.LinAlgError as error:
+                self.fit_failures[method, bid] = str(error)
+                kappa = gamma = [np.nan, np.nan]
             kappas.append(kappa)
             gammas.append(gamma)
 
@@ -697,7 +691,11 @@ class MultiBeadMeasurement(MutableMapping):
         assert type(method) == str
         assert method in ["PSD", "AV", "HV", "naive", "fusion"]
 
-        if not method in self.force.keys() or recalculate:
+        selection = (onlygoodbeads, tuple((bid, bead.good) for bid, bead in self.bead.items()))
+        if getattr(self, "_force_selection", None) != selection:
+            self.force.clear()
+        self._force_selection = selection
+        if method not in self.force or recalculate:
             kappas, _ = self.get_EoM_parameters(method, onlygoodbeads=onlygoodbeads)
             zpos = self.get_extensions(onlygoodbeads=onlygoodbeads)
             self.force[method] = np.empty_like(kappas)

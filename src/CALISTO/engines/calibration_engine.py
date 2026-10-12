@@ -29,58 +29,84 @@ def _compute_forces_worker(arg):
 def prepare_multibeadmeasurement(state_manager):
 
     measurements = state_manager.get_state("measurements")
-    if measurements is not None:
-        outdated = state_manager.get_state("measurements_outdated", True)
-        if not outdated:
-            return measurements
-
     plateaus = state_manager.get_state("plateaus")
     zmag_pos = state_manager.get_state("mag_pos")
-    bead_radius = state_manager.get_state("bead_radius")
-    axis = state_manager.get_state("axis")
-    fsample = state_manager.get_state("fsample")
-    include = state_manager.get_state("inclusion")
+    bead_pos = state_manager.get_state("bead_pos")
     bead_spec = state_manager.get_state("bead_specs")
-    include_col = (
-        bead_spec["Include"].to_numpy().repeat(len(plateaus)).reshape(-1, len(plateaus))
-    )
-    include = include & include_col
-
-    bead_pos = state_manager.get_state("bead_pos").copy()
-    if state_manager.get_state("median_filter"):
-        bead_pos[:, :, 2] = state_manager.get_state("bead_filtered_z_pos")
-    offsets = state_manager.get_state("bead_specs")["Offset"].to_numpy()
-    bead_pos[:, :, 2] = bead_pos[:, :, 2] - offsets
-    allBeads = np.arange(bead_pos.shape[1])
-    bead_pos = np.einsum("ijk->jki", bead_pos)
-    refbeadmask = state_manager.get_state("bead_specs")["Type"] == BeadType.REFERENCE
-    assert refbeadmask.any(), "No reference beads found in bead_specs."
-
-    refbeads = allBeads[refbeadmask]
-    bead_pos = bead_pos[allBeads, :, :]
-    measurements = []
-    for pid, pl in enumerate(plateaus):
-        magz = zmag_pos[pl]
-        magz = magz.mean()
-        m = MultiBeadMeasurement(
-            fsample,  # sampling frequency
-            magz,  # magnet position
-            0.0,  # magnet rotation
-            axis,  # measurement axis
-            bead_pos[:, :, pl],  # traces in the plateau
-            allBeads,  # all beads (references are included)
-            refbeads,  # reference bead ids
-            bead_radius=bead_radius,
-            kT=1.3806503e-2 * state_manager.get_state("temperature"),
-        )
-        for bid in allBeads:
-            m[bid].good = include[bid, pid]
-
-        m.subtract_reference()  # subtraces mean reference if there is more than one reference
-        measurements.append(m)
-
-    state_manager.set_state("measurements", measurements)
-    state_manager.set_state("measurements_outdated", False)
+    offsets = bead_spec["Offset"].to_numpy().copy()
+    types = bead_spec["Type"].to_numpy().copy()
+    refmask = types == BeadType.REFERENCE
+    assert refmask.any(), "No reference beads found in bead_specs."
+    include = state_manager.get_state("inclusion") & bead_spec["Include"].to_numpy()[:, None]
+    options = (state_manager.get_state("fsample"), state_manager.get_state("axis"),
+               state_manager.get_state("bead_radius"),
+               1.3806503e-2 * state_manager.get_state("temperature"))
+    filtered = state_manager.get_state("bead_filtered_z_pos") if state_manager.get_state("median_filter") else None
+    sources = (bead_pos, plateaus, zmag_pos, filtered)
+    source_revision = getattr(state_manager, "_measurement_source_revision", 0)
+    previous = getattr(state_manager, "_measurement_inputs", None)
+    reusable = (measurements is not None and previous is not None
+                and previous[5] == source_revision
+                and all(old is new for old, new in zip(previous[0], sources))
+                and np.array_equal(previous[1], types)
+                and np.array_equal(previous[2][refmask], offsets[refmask])
+                and np.array_equal(previous[3][refmask], include[refmask]))
+    if reusable:
+        changed_offsets = offsets != previous[2]
+        changed_selection = not np.array_equal(previous[3], include)
+        changed_options = options != previous[4]
+        for pid, m in enumerate(measurements):
+            if changed_offsets.any():
+                # Workers may still read old traces; publish a new owned array.
+                m.traces = m.traces.copy()
+                m.traces[:, 2, :] -= (offsets - previous[2])[:, None]
+                for bid, bead in m.bead.items():
+                    bead.trace = m.traces[bid]
+                    if changed_offsets[bid]:
+                        bead._extension = None
+                        bead._force.clear()
+                        if bead.ax == 2:
+                            bead._EoMparams.clear()
+            m.fs, m.ax, m.radius, m.kT = options
+            for bid, bead in m.bead.items():
+                bead.good = bool(include[bid, pid])
+                if changed_options:
+                    bead.fs, bead.ax, bead.radius, bead.kT = options
+                    bead._EoMparams.clear()
+                    bead._force.clear()
+            if changed_options or changed_selection or changed_offsets.any():
+                if changed_options or (changed_offsets.any() and options[1] == 2):
+                    m.fit_failures.clear()
+                m.extension.clear()
+                m.force.clear()
+                m.kappa.clear()
+                m.gamma.clear()
+                m.revision = getattr(m, "revision", 0) + 1
+    else:
+        allBeads = np.arange(bead_pos.shape[1])
+        refbeads = allBeads[refmask]
+        measurements = []
+        for pid, pl in enumerate(plateaus):
+            # Advanced indexing owns only this plateau, leaving raw data untouched.
+            traces = bead_pos[pl].transpose(1, 2, 0)
+            if np.shares_memory(traces, bead_pos):
+                traces = traces.copy()
+            if filtered is not None:
+                traces[:, 2, :] = filtered[pl].T
+            traces[:, 2, :] -= offsets[:, None]
+            m = MultiBeadMeasurement(
+                options[0], zmag_pos[pl].mean(), 0.0, options[1], traces,
+                allBeads, refbeads, bead_radius=options[2], kT=options[3],
+            )
+            for bid in allBeads:
+                m[bid].good = bool(include[bid, pid])
+            m.subtract_reference()
+            m.revision = 0
+            measurements.append(m)
+        state_manager.set_state("measurements", measurements)
+    state_manager._measurement_inputs = (sources, types, offsets, include.copy(), options, source_revision)
+    if state_manager.get_state("measurements_outdated", True):
+        state_manager.set_state("measurements_outdated", False)
     return measurements
 
 

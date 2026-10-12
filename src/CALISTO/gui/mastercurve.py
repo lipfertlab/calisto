@@ -109,6 +109,11 @@ class MasterCurvePlotterWindow(QWidget):
     def _forces_ready(self, result):
         """Called when force computation is done (runs in GUI thread)."""
         self.fullmagpos, self.fullforces, self.measurements = result
+        failures = [f"{method}, bead {bid + 1}, magnet {m.mag_pos:g} mm: {reason}"
+                    for m in self.measurements for (method, bid), reason in m.fit_failures.items()
+                    if m[bid].good]
+        self.fit_warning_label.setText(f"{len(failures)} force fits failed; excluded from curve fitting." if failures else "")
+        self.fit_warning_label.setToolTip("\n".join(failures))
         print("Forces ready, plotting curves...")
         self.plot_curves()
         QApplication.restoreOverrideCursor()
@@ -157,6 +162,9 @@ class MasterCurvePlotterWindow(QWidget):
         self.single_exponential_label_text = "F(z) = F<sub>max</sub> e<sup>-z/Λ</sup>"
         self.modellabel = QLabel(self.double_exponential_label_text)
         control_layout.addWidget(self.modellabel, 2, 0, 1, 5)
+        self.fit_warning_label = QLabel()
+        self.fit_warning_label.setWordWrap(True)
+        control_layout.addWidget(self.fit_warning_label, 10, 0, 1, 5)
 
         hvlabel = QLabel("HV")
         control_layout.addWidget(hvlabel, 3, 1)
@@ -280,17 +288,18 @@ class MasterCurvePlotterWindow(QWidget):
 
         self.fcplotter.clear()
         for idx, method in enumerate(["PSD", "AV", "HV"]):
+            valid = np.isfinite(fullmagpos) & np.isfinite(fullforces[method]).all(axis=1)
             errorbar = pyg.ErrorBarItem(
-                x=fullmagpos,
-                y=fullforces[method][:, 0],
-                top=fullforces[method][:, 1],
-                bottom=fullforces[method][:, 1],
+                x=fullmagpos[valid],
+                y=fullforces[method][valid, 0],
+                top=fullforces[method][valid, 1],
+                bottom=fullforces[method][valid, 1],
                 beam=0.1,
                 pen=pyg.mkPen(color=colors[method], width=5),
             )
             self.fcplotter.plot(
-                fullmagpos,
-                fullforces[method][:, 0],
+                fullmagpos[valid],
+                fullforces[method][valid, 0],
                 symbol="o",
                 pen=None,
                 symbolPen=pyg.mkPen(color=colors[method], width=1),
@@ -300,10 +309,11 @@ class MasterCurvePlotterWindow(QWidget):
             self.fcplotter.addItem(errorbar)
             fitmagpos = np.linspace(fullmagpos.min(), fullmagpos.max(), 300)
             try:
-                if self.force_ub is None:
-                    mask = np.ones(fullforces[method].shape[0], dtype=bool)
-                else:
-                    mask = fullforces[method][:, 0] < self.force_ub
+                mask = valid.copy()
+                if self.force_ub is not None:
+                    mask &= fullforces[method][:, 0] < self.force_ub
+                if not mask.any():
+                    raise ValueError(f"No valid force fits for {method}.")
 
                 if (
                     self.state_manager.get_state("master_curve_model")
