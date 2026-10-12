@@ -83,11 +83,8 @@ def identify_plateaus(zmag_pos, tolerance, min_plateau_length):
     zmag_const = np.abs(zmag_pos[:-1] - zmag_pos[1:]) < tolerance
     constindices = (indices[:-1])[zmag_const]
 
-    plateaus = np.array(consecutive(constindices), dtype=object)
-    plateau_sizes = np.array([gr.size for gr in plateaus])
-    plateaus = plateaus[plateau_sizes > min_plateau_length]
-
-    return plateaus
+    return [group for group in consecutive(constindices)
+            if group.size > min_plateau_length]
 
 
 def get_bead_inclusion_array(state_manager, plateaus):

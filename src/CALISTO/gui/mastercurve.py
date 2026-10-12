@@ -53,6 +53,7 @@ class MasterCurvePlotterWindow(QWidget):
         # Initialize worker manager
         self.worker_manager = WorkerManager(self)
         self.measurements = None
+        self.fitparemeters = {}
 
         self.layout = QHBoxLayout()
         self.setLayout(self.layout)
@@ -64,7 +65,6 @@ class MasterCurvePlotterWindow(QWidget):
         self.layout.addWidget(self.control_group)
         # self.zrange = self.plotter.getAxis("left").range
         self.force_ub = None
-        self.fitparemeters = {}
         self.fullmagpos = None
         self.fullforces = None
 
@@ -95,6 +95,9 @@ class MasterCurvePlotterWindow(QWidget):
 
     def _launch_force_computation(self, measurements):
         """Offload force computation to a worker thread."""
+        self._clear_fit_parameters()
+        self.fullmagpos = None
+        self.fullforces = None
         self.worker_manager.run_async(
             engine.compute_forces_from_measurements,
             measurements,
@@ -106,6 +109,11 @@ class MasterCurvePlotterWindow(QWidget):
     def _forces_ready(self, result):
         """Called when force computation is done (runs in GUI thread)."""
         self.fullmagpos, self.fullforces, self.measurements = result
+        failures = [f"{method}, bead {bid + 1}, magnet {m.mag_pos:g} mm: {reason}"
+                    for m in self.measurements for (method, bid), reason in m.fit_failures.items()
+                    if m[bid].good]
+        self.fit_warning_label.setText(f"{len(failures)} force fits failed; excluded from curve fitting." if failures else "")
+        self.fit_warning_label.setToolTip("\n".join(failures))
         print("Forces ready, plotting curves...")
         self.plot_curves()
         QApplication.restoreOverrideCursor()
@@ -154,6 +162,9 @@ class MasterCurvePlotterWindow(QWidget):
         self.single_exponential_label_text = "F(z) = F<sub>max</sub> e<sup>-z/Λ</sup>"
         self.modellabel = QLabel(self.double_exponential_label_text)
         control_layout.addWidget(self.modellabel, 2, 0, 1, 5)
+        self.fit_warning_label = QLabel()
+        self.fit_warning_label.setWordWrap(True)
+        control_layout.addWidget(self.fit_warning_label, 10, 0, 1, 5)
 
         hvlabel = QLabel("HV")
         control_layout.addWidget(hvlabel, 3, 1)
@@ -190,9 +201,11 @@ class MasterCurvePlotterWindow(QWidget):
         self.methodcombo.addItems(["HV", "AV", "PSD"])
         control_layout.addWidget(self.methodcombo, 11, 1, 1, 4)
 
-        exportbutton = QPushButton("Export Force Calibration")
-        control_layout.addWidget(exportbutton, 12, 0, 1, 5)
-        exportbutton.clicked.connect(self.export_calibration)
+        self.exportbutton = QPushButton("Export Force Calibration")
+        self.exportbutton.setEnabled(False)
+        control_layout.addWidget(self.exportbutton, 12, 0, 1, 5)
+        self.exportbutton.clicked.connect(self.export_calibration)
+        self.methodcombo.currentTextChanged.connect(self._update_export_enabled)
 
         self.hvfmax = QLabel()
         control_layout.addWidget(self.hvfmax, 4, 1)
@@ -255,7 +268,16 @@ class MasterCurvePlotterWindow(QWidget):
                 magbeads.append(str(i + 1))
         return np.array(magbeads)
 
+    def _update_export_enabled(self):
+        self.exportbutton.setEnabled(self.methodcombo.currentText() in self.fitparemeters)
+
+    def _clear_fit_parameters(self):
+        self.fitparemeters = {}
+        self.state_manager.set_state("master_curve_params", {})
+        self._update_export_enabled()
+
     def plot_curves(self):
+        self._clear_fit_parameters()
         # Guard: Don't plot if forces aren't computed yet
         if self.fullmagpos is None or self.fullforces is None:
             return
@@ -266,17 +288,18 @@ class MasterCurvePlotterWindow(QWidget):
 
         self.fcplotter.clear()
         for idx, method in enumerate(["PSD", "AV", "HV"]):
+            valid = np.isfinite(fullmagpos) & np.isfinite(fullforces[method]).all(axis=1)
             errorbar = pyg.ErrorBarItem(
-                x=fullmagpos,
-                y=fullforces[method][:, 0],
-                top=fullforces[method][:, 1],
-                bottom=fullforces[method][:, 1],
+                x=fullmagpos[valid],
+                y=fullforces[method][valid, 0],
+                top=fullforces[method][valid, 1],
+                bottom=fullforces[method][valid, 1],
                 beam=0.1,
                 pen=pyg.mkPen(color=colors[method], width=5),
             )
             self.fcplotter.plot(
-                fullmagpos,
-                fullforces[method][:, 0],
+                fullmagpos[valid],
+                fullforces[method][valid, 0],
                 symbol="o",
                 pen=None,
                 symbolPen=pyg.mkPen(color=colors[method], width=1),
@@ -286,10 +309,11 @@ class MasterCurvePlotterWindow(QWidget):
             self.fcplotter.addItem(errorbar)
             fitmagpos = np.linspace(fullmagpos.min(), fullmagpos.max(), 300)
             try:
-                if self.force_ub is None:
-                    mask = np.ones(fullforces[method].shape[0], dtype=bool)
-                else:
-                    mask = fullforces[method][:, 0] < self.force_ub
+                mask = valid.copy()
+                if self.force_ub is not None:
+                    mask &= fullforces[method][:, 0] < self.force_ub
+                if not mask.any():
+                    raise ValueError(f"No valid force fits for {method}.")
 
                 if (
                     self.state_manager.get_state("master_curve_model")
@@ -377,6 +401,7 @@ class MasterCurvePlotterWindow(QWidget):
                 )
 
             except Exception as e:
+                self.fitparemeters.pop(method, None)
                 print(f"Error fitting master curve for {method}: {e}")
                 self.fitparemeterslabel[method][0].setText("N/A")
                 self.fitparemeterslabel[method][2].setText("N/A")
@@ -384,9 +409,9 @@ class MasterCurvePlotterWindow(QWidget):
                 self.fitparemeterslabel[method][3].setText("N/A")
                 self.fitparemeterslabel[method][4].setText("N/A")
 
-            # plot legend
-            self.state_manager.set_state("master_curve_params", self.fitparemeters)
-            self.fcplotter.addLegend()
+        self.state_manager.set_state("master_curve_params", self.fitparemeters.copy())
+        self._update_export_enabled()
+        self.fcplotter.addLegend()
 
     def export_calibration(self):
         path, _ = QFileDialog.getSaveFileName(
@@ -424,6 +449,8 @@ class MasterCurvePlotterWindow(QWidget):
             # Recompute forces in worker thread, plot_curves runs on completion
             QApplication.setOverrideCursor(Qt.WaitCursor)
             measurements = engine.prepare_multibeadmeasurement(self.state_manager)
+            self.dexpfitres = None
+            self.expfitres = None
             self._launch_force_computation(measurements)
         except Exception as e:
             QMessageBox.critical(self, "Error", str(e))

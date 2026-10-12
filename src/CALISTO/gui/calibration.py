@@ -10,7 +10,7 @@ from PySide6.QtWidgets import (
     QRadioButton,
     QApplication,
 )
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, Slot
 
 import pyqtgraph as pyg
 import numpy as np
@@ -200,6 +200,10 @@ class CalibrationPlotterWindow(QWidget):
         # Extract ALL data from state_manager and measurements in main thread
         # (Qt objects and complex objects are not thread-safe!)
         try:
+            # Refresh dependencies before reusing results from an earlier plot.
+            if hasattr(self.state_manager, "_measurement_inputs"):
+                self.measurements = engine.prepare_multibeadmeasurement(self.state_manager)
+            self._pending_beads = []
             include = self.state_manager.get_state("inclusion").copy()
             temp = self.state_manager.get_state("temperature")
 
@@ -209,18 +213,9 @@ class CalibrationPlotterWindow(QWidget):
                 if not include[bead_id, pid]:
                     continue
 
-                # Extract all data we need from this measurement
-                mag_pos = m.mag_pos
-                m_bead = m[bead_id]
-                extension_mean = m_bead.get_extension()["mean"]
-
-                forces = {}
-                for method in ["PSD", "AV", "HV"]:
-                    forces[method] = m_bead.get_force(method)
-
-                measurement_data.append(
-                    {"mag_pos": mag_pos, "extension": extension_mean, "forces": forces}
-                )
+                # Independent result caches; force computation only reads traces.
+                measurement_data.append((m.mag_pos, m[bead_id].copy()))
+                self._pending_beads.append((m, getattr(m, "revision", 0), bead_id))
         except Exception as e:
             print(f"Error preparing data: {e}")
             import traceback
@@ -232,10 +227,6 @@ class CalibrationPlotterWindow(QWidget):
         self.set_controls_enabled(False)
         QApplication.setOverrideCursor(Qt.WaitCursor)
 
-        def cleanup():
-            QApplication.restoreOverrideCursor()
-            self.set_controls_enabled(True)
-
         # Run computation in background thread with pure Python/NumPy data only
         self.worker_manager.run_async(
             self._compute_plot_data,
@@ -243,8 +234,13 @@ class CalibrationPlotterWindow(QWidget):
             temp,
             on_result=self._update_plots,
             on_error=self._handle_plot_error,
-            on_finished=cleanup,
+            on_finished=self._finish_plot_computation,
         )
+
+    @Slot()
+    def _finish_plot_computation(self):
+        QApplication.restoreOverrideCursor()
+        self.set_controls_enabled(True)
 
     def _compute_plot_data(self, measurement_data, temp):
         """Compute all data needed for plotting (runs in worker thread)."""
@@ -265,16 +261,16 @@ class CalibrationPlotterWindow(QWidget):
                 "has_data": False,
             }
 
-        # Extract arrays from pre-processed data
+        # Compute extension and forces here, away from the GUI thread.
         fullmagpos = []
         extensions = []
         fullforces = {"PSD": [], "AV": [], "HV": []}
 
-        for data in measurement_data:
-            fullmagpos.append(data["mag_pos"])
-            extensions.append(data["extension"])
+        for mag_pos, bead in measurement_data:
+            fullmagpos.append(mag_pos)
+            extensions.append(bead.get_extension()["mean"])
             for method in ["PSD", "AV", "HV"]:
-                fullforces[method].append(data["forces"][method])
+                fullforces[method].append(bead.get_force(method))
 
         fullmagpos = np.array(fullmagpos).flatten()
         extensions = np.array(extensions).flatten()
@@ -339,10 +335,16 @@ class CalibrationPlotterWindow(QWidget):
             "plot_data": plot_data,
             "colors": colors,
             "has_data": True,
+            "computed_beads": [bead for _, bead in measurement_data],
         }
 
+    @Slot(object)
     def _update_plots(self, result):
         """Update plots with computed data (runs in GUI thread)."""
+        # Publish independent completed caches on the GUI thread only.
+        for (measurement, revision, bid), bead in zip(self._pending_beads, result.get("computed_beads", [])):
+            if getattr(measurement, "revision", 0) == revision:
+                measurement.bead[bid] = bead.copy()
         # Clear plots first
         self.fcplotter.clear()
         self.wlcplotter.clear()
@@ -422,6 +424,7 @@ class CalibrationPlotterWindow(QWidget):
         self.fcplotter.addLegend()
         self.wlcplotter.addLegend()
 
+    @Slot(str, str)
     def _handle_plot_error(self, error_msg, traceback):
         """Handle errors from plotting computation."""
         print(f"Error computing plot data: {error_msg}")

@@ -26,6 +26,7 @@ sys.path.append(str(Path(__file__).resolve().parent.parent))
 from engines.engine import BeadType
 
 import engines.traceplotter_engine as engine
+import numpy as np
 
 checkmark = "\u2713"
 crossmark = "\u2717"
@@ -201,6 +202,8 @@ class TracePlotterWindow(QWidget):
                     beadpos = self.state_manager.get_state("bead_pos")
                     time = self.state_manager.get_state("time")
                     r = beadpos[:, beadid, i]
+                    if i != 2:#not z-axis
+                        r-=np.mean(r) #center x and y around 0
 
                     self.plot_items[ax][beadid] = pwidget.plot(
                         time, r, pen=pen, autoDownsample=True

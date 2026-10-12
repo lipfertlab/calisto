@@ -10,6 +10,7 @@ sys.path.append(str(Path(__file__).resolve().parent))
 import shutil
 from platformdirs import user_config_dir
 from PySide6.QtWidgets import QApplication
+from pyqtgraph.util.garbage_collector import GarbageCollector
 
 
 import gui.landing as landing
@@ -44,6 +45,8 @@ def main():
     state_manager.set_state("config", config)
     state_manager.set_state("config_setup", "Default")
     MTGui = QApplication(sys.argv)
+    # Keep cyclic Qt object cleanup on the GUI thread, including between workers.
+    MTGui.garbage_collector = GarbageCollector()
     window = landing.MainWindow(state_manager)
     window.show()
     MTGui.exec()

@@ -48,7 +48,8 @@ def load_bead_datafile(path, state_manager):
     state_manager.set_state("bead_pos", data)
     state_manager.set_state("#beads", data.shape[1])
 
-    fsample = (len(time) - 1) / (time[-1] - time[0])
+    fsample = time[1:] - time[:-1]
+    fsample = 1 / np.median(fsample)
     state_manager.set_state("computed_fsample", fsample)
     state_manager.set_state("bead_specs_outdated", True)
     state_manager.set_state("measurements_outdated", True)
@@ -95,7 +96,7 @@ def verify_data_consistency(state_manager):
     if bead_pos.shape[0] != len(time):
         raise ValueError("Time and data are not consistent.")
 
-    magposinterp = interp1d(mag_time, mag_pos, kind="nearest")
+    magposinterp = interp1d(mag_time, mag_pos, kind="nearest",fill_value="extrapolate")
     mag_pos = magposinterp(time)
     state_manager.set_state("mag_pos", mag_pos)
     state_manager.set_state("mag_time", time)
@@ -167,44 +168,48 @@ def isbeadkey(k):
     except ValueError:
         return False
 
-def load_hdf_datafile(path, state_manager):
-    f = h5py.File(path, "r")
+def read_hdf_beads(f):
+    """Read bead arrays indexed by unique, contiguous zero-based bead IDs."""
+    keys = [key for key in f.keys() if isbeadkey(key)]
+    ids = [int(key[1:] if key[0] in "MR" else key) for key in keys]
+    if not keys or sorted(ids) != list(range(len(keys))):
+        raise ValueError("HDF5 bead IDs must be unique and contiguous starting at 0.")
 
-    time = np.array(f["timestamp"]).astype(np.float64)
-    time = process_bead_data_time_units(time, state_manager)
-
-    mag_time = f["stage"]["t_s"]
-    mag_time = process_motor_data_time_units(mag_time, state_manager)
-
-    mag_pos = f["stage"]["mag_pos_mm"]
-    mag_pos = process_motor_data_position_units(mag_pos, state_manager)
-
-    nbeads = 0
-    for k in f.keys():
-        if isbeadkey(k):
-            nbeads += 1
-
-    bead_type = np.empty(nbeads, dtype=BeadType)
-
-    bead_data = np.empty((time.shape[0], nbeads, 3), dtype=np.float64)
-
-    for k in f.keys():
-        if not isbeadkey(k):
+    time = np.asarray(f["timestamp"][...], dtype=np.float64)
+    bead_type = np.empty(len(keys), dtype=object)
+    # Each dataset is one time series; keep its destination contiguous.
+    bead_data = np.empty((len(time), len(keys), 3), dtype=np.float64, order="F")
+    for key, beadid in zip(keys, ids):
+        bead_type[beadid] = BeadType.REFERENCE if key.startswith("R") else BeadType.MAGNETIC
+        bead = f[key]
+        if isinstance(bead, h5py.Dataset):
+            if bead.shape != time.shape:
+                raise ValueError(f"HDF5 bead {key} must match timestamp shape.")
+            # Read compound coordinates together: decompress each chunk only once.
+            values = bead.fields(("x_nm", "y_nm", "z_nm"))[...]
+            for axis, name in enumerate(("x_nm", "y_nm", "z_nm")):
+                bead_data[:, beadid, axis] = values[name]
             continue
-        if k[0] == "M" or k[0] == "R":
-            type = BeadType.MAGNETIC if k[0] == "M" else BeadType.REFERENCE
-            beadid = int(k[1:])
-        else:
-            type = BeadType.MAGNETIC
-            beadid = int(k)
-        bead_type[beadid] = type
-        bead = f[k]
-        bead_data[:, beadid, 0] = bead["x_nm"]
-        bead_data[:, beadid, 1] = bead["y_nm"]
-        bead_data[:, beadid, 2] = bead["z_nm"]
-    f.close()
+        for axis, name in enumerate(("x_nm", "y_nm", "z_nm")):
+            dataset = bead[name]
+            if dataset.shape != time.shape:
+                raise ValueError(f"HDF5 bead {key}/{name} must match timestamp shape.")
+            dataset.read_direct(bead_data[:, beadid, axis])
+    return time, bead_data, bead_type
 
-    bead_data = process_bead_data_position_units(bead_data, state_manager)
+
+def load_hdf_datafile(path, state_manager):
+    with h5py.File(path, "r") as f:
+        time, bead_data, bead_type = read_hdf_beads(f)
+        mag_time = np.asarray(f["stage"]["t_s"][...])
+        mag_pos = np.asarray(f["stage"]["mag_pos_mm"][...])
+
+    time = process_bead_data_time_units(time, state_manager)
+    mag_time = process_motor_data_time_units(mag_time, state_manager)
+    mag_pos = process_motor_data_position_units(mag_pos, state_manager)
+    nbeads = bead_data.shape[1]
+
+    bead_data = process_bead_data_position_units(bead_data, state_manager, copy=False)
 
     state_manager.set_state("time", time)
     state_manager.set_state("bead_pos", bead_data)
@@ -213,7 +218,8 @@ def load_hdf_datafile(path, state_manager):
     state_manager.set_state("mag_pos", mag_pos)
     state_manager.set_state("bead_type", bead_type)
 
-    fsample = (len(time) - 1) / (time[-1] - time[0])
+    fsample =  time[1:] - time[:-1]
+    fsample = 1 / np.median(fsample)
     state_manager.set_state("computed_fsample", fsample)
     state_manager.set_state("bead_specs_outdated", True)
     state_manager.set_state("measurements_outdated", True)
