@@ -96,7 +96,7 @@ def verify_data_consistency(state_manager):
     if bead_pos.shape[0] != len(time):
         raise ValueError("Time and data are not consistent.")
 
-    magposinterp = interp1d(mag_time, mag_pos, kind="nearest")
+    magposinterp = interp1d(mag_time, mag_pos, kind="nearest",fill_value="extrapolate")
     mag_pos = magposinterp(time)
     state_manager.set_state("mag_pos", mag_pos)
     state_manager.set_state("mag_time", time)
