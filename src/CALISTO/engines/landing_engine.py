@@ -48,7 +48,8 @@ def load_bead_datafile(path, state_manager):
     state_manager.set_state("bead_pos", data)
     state_manager.set_state("#beads", data.shape[1])
 
-    fsample = (len(time) - 1) / (time[-1] - time[0])
+    fsample = time[1:] - time[:-1]
+    fsample = 1 / np.median(fsample)
     state_manager.set_state("computed_fsample", fsample)
     state_manager.set_state("bead_specs_outdated", True)
     state_manager.set_state("measurements_outdated", True)
@@ -217,7 +218,8 @@ def load_hdf_datafile(path, state_manager):
     state_manager.set_state("mag_pos", mag_pos)
     state_manager.set_state("bead_type", bead_type)
 
-    fsample = (len(time) - 1) / (time[-1] - time[0])
+    fsample =  time[1:] - time[:-1]
+    fsample = 1 / np.median(fsample)
     state_manager.set_state("computed_fsample", fsample)
     state_manager.set_state("bead_specs_outdated", True)
     state_manager.set_state("measurements_outdated", True)
